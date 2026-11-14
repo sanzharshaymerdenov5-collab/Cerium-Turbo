@@ -2,14 +2,14 @@
 
 use bevy::math::{IVec3, UVec3, Vec3};
 
-use super::spec::{MapSpec, StructureSpec};
+use super::spec::{MapBiome, MapSpec, StructureSpec};
 use crate::voxel::{Material, VoxelGrid};
 
 /// Высота рельефа (в метрах) в мировой точке `(x, z)`.
 pub fn terrain_height_m(spec: &MapSpec, x: f32, z: f32) -> f32 {
-    // Плавный коэффициент выравнивания в плоских зонах (стрельбище, спавн).
+    // Плавный коэффициент выравнивания в плоских зонах и ледяных озёрах.
     let mut flat_blend = 0.0f32;
-    for fz in &spec.flat_zones {
+    for fz in spec.flat_zones.iter().chain(spec.ice_zones.iter()) {
         let dx = if x < fz.min_xz.0 {
             fz.min_xz.0 - x
         } else if x > fz.max_xz.0 {
@@ -67,26 +67,72 @@ pub fn generate_map_grid(spec: &MapSpec) -> VoxelGrid {
     );
     let mut grid = VoxelGrid::new(dims, s, origin);
 
-    // 1. Неразрушаемый рельеф (камень → грунт → трава/песок).
+    // 1. Неразрушаемый рельеф (камень / грунт / трава / песок / снег / лёд).
     for z in 0..dims.z as i32 {
         for x in 0..dims.x as i32 {
             let wx = origin.x + (x as f32 + 0.5) * s;
             let wz = origin.z + (z as f32 + 0.5) * s;
             let h_m = terrain_height_m(spec, wx, wz);
             let top_y = ((h_m / s).round() as i32 - 1).clamp(0, dims.y as i32 - 2);
-            // Центральная дорожка стрельбища — песчано-грунтовая.
-            let is_lane = wx.abs() < 4.5 && wz > -140.0 && wz < 130.0;
+            let is_lane =
+                spec.biome == MapBiome::Temperate && wx.abs() < 4.5 && wz > -140.0 && wz < 130.0;
+            let in_ice = spec
+                .ice_zones
+                .iter()
+                .any(|iz| wx >= iz.min_xz.0 && wx <= iz.max_xz.0 && wz >= iz.min_xz.1 && wz <= iz.max_xz.1);
+            let high_rock = top_y as f32 * s > spec.base_height_m + 3.5;
+
+            let surface_mat = if in_ice {
+                Material::Ice
+            } else {
+                match spec.biome {
+                    MapBiome::Temperate => {
+                        if is_lane {
+                            Material::Sand
+                        } else if high_rock {
+                            Material::Rock
+                        } else {
+                            Material::Grass
+                        }
+                    }
+                    MapBiome::City => {
+                        // Центральные проезжие улицы из каменных плит (неразрушаемые).
+                        if wx.abs() < 12.0 || wz.abs() < 12.0 {
+                            Material::Rock
+                        } else {
+                            Material::Soil
+                        }
+                    }
+                    MapBiome::Desert => {
+                        if high_rock {
+                            Material::Rock
+                        } else {
+                            Material::Sand
+                        }
+                    }
+                    MapBiome::Winter => {
+                        if high_rock {
+                            Material::Rock
+                        } else {
+                            Material::Snow
+                        }
+                    }
+                    MapBiome::Industrial => {
+                        // Насыпи и полосы путей — камень, земля между путями — грунт.
+                        if (wx.abs() - 16.0).abs() < 3.5 || wx.abs() < 4.0 {
+                            Material::Rock
+                        } else {
+                            Material::Soil
+                        }
+                    }
+                }
+            };
+
             for y in 0..=top_y {
                 let mat = if y == 0 {
                     Material::Rock
                 } else if y == top_y {
-                    if is_lane {
-                        Material::Sand
-                    } else if top_y as f32 * s > spec.base_height_m + 3.5 {
-                        Material::Rock
-                    } else {
-                        Material::Grass
-                    }
+                    surface_mat
                 } else {
                     Material::Soil
                 };
@@ -189,7 +235,7 @@ pub fn generate_map_grid(spec: &MapSpec) -> VoxelGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::maps::spec::PROVING_GROUNDS_RON;
+    use crate::maps::spec::{FROZEN_FORT_RON, PROVING_GROUNDS_RON, available_maps};
     use crate::voxel::VoxelWorld;
 
     #[test]
@@ -222,5 +268,89 @@ mod tests {
             res_wall.removed.iter().all(|(_, m)| m.is_destructible()),
             "удалены должны быть только разрушаемые материалы"
         );
+    }
+
+    #[test]
+    fn all_five_maps_have_indestructible_ground_and_destructible_structures() {
+        let maps = available_maps();
+        assert_eq!(maps.len(), 5, "должно быть ровно 5 карт на Этапе 5");
+
+        for spec in maps {
+            assert_eq!(spec.enemy_spawns.len(), 3, "карта {} без 3 врагов", spec.id);
+            let grid = generate_map_grid(&spec);
+            assert!(
+                grid.count_solid() > 50_000,
+                "слишком мало вокселей на карте {}",
+                spec.id
+            );
+
+            let h0 = grid
+                .surface_height_at(spec.spawn_xz.0, spec.spawn_xz.1)
+                .unwrap();
+            let h1 = grid
+                .surface_height_at(spec.spawn_xz.0 + 2.0, spec.spawn_xz.1 - 2.0)
+                .unwrap();
+            assert!(
+                (h0 - h1).abs() < 0.05,
+                "спавн на карте {} неровный: {h0} vs {h1}",
+                spec.id
+            );
+
+            let mut world = VoxelWorld::new(grid);
+            let ground_res = world.carve_sphere(
+                Vec3::new(spec.spawn_xz.0, h0 - spec.voxel_size * 0.5, spec.spawn_xz.1),
+                1.5,
+            );
+            assert_eq!(
+                ground_res.removed.len(),
+                0,
+                "рельеф спавна {} не должен разрушаться",
+                spec.id
+            );
+            assert!(ground_res.protected_terrain > 0);
+
+            let first = spec.structures.first().expect("на карте должны быть постройки");
+            let probe = match *first {
+                StructureSpec::Wall {
+                    min_xz,
+                    max_xz,
+                    height_m,
+                    ..
+                } => {
+                    let cx = (min_xz.0 + max_xz.0) * 0.5;
+                    let cz = (min_xz.1 + max_xz.1) * 0.5;
+                    let gy = terrain_height_m(&spec, cx, cz);
+                    Vec3::new(cx, gy + height_m * 0.45, cz)
+                }
+                StructureSpec::House {
+                    center_xz,
+                    size_xz,
+                    height_m,
+                    ..
+                } => {
+                    let wx = center_xz.0 - size_xz.0 * 0.5;
+                    let wz = center_xz.1;
+                    let gy = terrain_height_m(&spec, wx, wz);
+                    Vec3::new(wx, gy + height_m * 0.4, wz)
+                }
+            };
+            let st_res = world.carve_sphere(probe, 1.4);
+            assert!(
+                !st_res.removed.is_empty(),
+                "постройка на карте {} должна разрушаться",
+                spec.id
+            );
+            assert!(
+                st_res.removed.iter().all(|(_, m)| m.is_destructible()),
+                "удалены должны быть только разрушаемые материалы на карте {}",
+                spec.id
+            );
+        }
+
+        // Проверка ледяного озера на зимней карте.
+        let winter = MapSpec::from_ron(FROZEN_FORT_RON).unwrap();
+        let grid = generate_map_grid(&winter);
+        let ice_hit = grid.raycast(Vec3::new(0.0, 10.0, 0.0), Vec3::NEG_Y, 15.0).unwrap();
+        assert_eq!(ice_hit.material, Material::Ice);
     }
 }

@@ -79,6 +79,18 @@ pub enum MapBiome {
     Industrial,
 }
 
+impl MapBiome {
+    pub fn ru_name(self) -> &'static str {
+        match self {
+            Self::Temperate => "Полигон (умеренный)",
+            Self::City => "Городские руины",
+            Self::Desert => "Пустыня / каньон",
+            Self::Winter => "Зимний фронт (гололёд)",
+            Self::Industrial => "Промзона / ЖД",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnemySpawnSpec {
     pub pos_xz: (f32, f32),
@@ -102,6 +114,8 @@ pub struct MapSpec {
     pub spawn_xz: (f32, f32),
     pub spawn_yaw_deg: f32,
     pub flat_zones: Vec<FlatZone>,
+    #[serde(default)]
+    pub ice_zones: Vec<FlatZone>,
     pub hills: Vec<HillSpec>,
     pub ditches: Vec<DitchSpec>,
     pub structures: Vec<StructureSpec>,
@@ -119,17 +133,31 @@ impl MapSpec {
 }
 
 pub const PROVING_GROUNDS_RON: &str = include_str!("../../assets/maps/proving_grounds.ron");
+pub const CITY_RUINS_RON: &str = include_str!("../../assets/maps/city_ruins.ron");
+pub const DESERT_CANYON_RON: &str = include_str!("../../assets/maps/desert_canyon.ron");
+pub const FROZEN_FORT_RON: &str = include_str!("../../assets/maps/frozen_fort.ron");
+pub const RAIL_YARD_RON: &str = include_str!("../../assets/maps/rail_yard.ron");
 
 pub fn load_map_spec(id: &str) -> Option<MapSpec> {
     match id {
         "proving_grounds" => MapSpec::from_ron(PROVING_GROUNDS_RON).ok(),
+        "city_ruins" => MapSpec::from_ron(CITY_RUINS_RON).ok(),
+        "desert_canyon" => MapSpec::from_ron(DESERT_CANYON_RON).ok(),
+        "frozen_fort" => MapSpec::from_ron(FROZEN_FORT_RON).ok(),
+        "rail_yard" => MapSpec::from_ron(RAIL_YARD_RON).ok(),
         _ => None,
     }
 }
 
 pub fn available_maps() -> Vec<MapSpec> {
-    ["proving_grounds"]
-        .iter()
-        .filter_map(|id| load_map_spec(id))
-        .collect()
+    [
+        "proving_grounds",
+        "city_ruins",
+        "desert_canyon",
+        "frozen_fort",
+        "rail_yard",
+    ]
+    .iter()
+    .filter_map(|id| load_map_spec(id))
+    .collect()
 }

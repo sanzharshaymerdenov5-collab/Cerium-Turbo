@@ -18,8 +18,8 @@ use crate::voxel::{
 };
 pub use generate::{generate_map_grid, terrain_height_m};
 pub use spec::{
-    EnemySpawnSpec, MapBiome, MapSpec, PROVING_GROUNDS_RON, TargetSpec, available_maps,
-    load_map_spec,
+    CITY_RUINS_RON, DESERT_CANYON_RON, EnemySpawnSpec, FROZEN_FORT_RON, MapBiome, MapSpec,
+    PROVING_GROUNDS_RON, RAIL_YARD_RON, TargetSpec, available_maps, load_map_spec,
 };
 
 pub struct MapPlugin;
@@ -205,23 +205,94 @@ fn setup_battle_scene(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+    use crate::tank::TankState;
+    use crate::tank::controller::tank_suspension_and_drive;
+    use bevy::state::app::StatesPlugin;
+    use bevy::time::TimeUpdateStrategy;
 
     #[test]
-    fn proving_grounds_enemy_spawns_are_reachable_on_nav_grid() {
-        let spec = MapSpec::from_ron(PROVING_GROUNDS_RON).unwrap();
-        let grid = generate_map_grid(&spec);
-        let nav = VoxelNavGrid::from_grid(&grid, VoxelNavGrid::DEFAULT_CELL_M);
-        let p = Vec3::new(spec.spawn_xz.0, spec.base_height_m, spec.spawn_xz.1);
-        assert!(!spec.enemy_spawns.is_empty());
-        for es in &spec.enemy_spawns {
-            let ep = Vec3::new(es.pos_xz.0, spec.base_height_m, es.pos_xz.1);
-            let path = nav.find_path(p, ep);
-            assert!(
-                !path.is_empty(),
-                "спавн врага {:?} должен быть достижим от игрока",
-                es.pos_xz
-            );
+    fn all_five_maps_enemy_spawns_are_reachable_on_nav_grid() {
+        let maps = available_maps();
+        assert_eq!(maps.len(), 5);
+        for spec in maps {
+            let grid = generate_map_grid(&spec);
+            let nav = VoxelNavGrid::from_grid(&grid, VoxelNavGrid::DEFAULT_CELL_M);
+            let p = Vec3::new(spec.spawn_xz.0, spec.base_height_m, spec.spawn_xz.1);
+            assert!(!spec.enemy_spawns.is_empty(), "карта {} без врагов", spec.id);
+            for es in &spec.enemy_spawns {
+                let ep = Vec3::new(es.pos_xz.0, spec.base_height_m, es.pos_xz.1);
+                let path = nav.find_path(p, ep);
+                assert!(
+                    !path.is_empty(),
+                    "на карте {} спавн врага {:?} должен быть достижим от игрока {:?}",
+                    spec.id,
+                    es.pos_xz,
+                    spec.spawn_xz
+                );
+            }
         }
+    }
+
+    #[test]
+    fn frozen_fort_ice_lake_reduces_track_traction() {
+        let spec = MapSpec::from_ron(FROZEN_FORT_RON).unwrap();
+        let grid = generate_map_grid(&spec);
+        let h = grid.surface_height_at(0.0, 0.0).unwrap();
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            TransformPlugin,
+            StatesPlugin,
+            PhysicsPlugins::default(),
+        ))
+        .init_state::<GameState>()
+        .init_asset::<Mesh>()
+        .init_asset::<StandardMaterial>()
+        .init_resource::<VoxelAssets>()
+        .insert_resource(VoxelWorld::new(grid))
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )))
+        .add_systems(FixedUpdate, tank_suspension_and_drive);
+
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::InBattle);
+
+        app.add_systems(
+            Startup,
+            move |mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, assets: Res<VoxelAssets>| {
+                let tank = load_tank_spec("t34_85").unwrap();
+                spawn_tank(
+                    &mut commands,
+                    &mut meshes,
+                    &assets,
+                    tank,
+                    Vec3::new(0.0, h + 0.25, 0.0),
+                    0.0,
+                    true,
+                );
+            },
+        );
+        app.finish();
+        app.cleanup();
+
+        for _ in 0..20 {
+            app.update();
+        }
+
+        let mut q = app.world_mut().query::<&TankState>();
+        let st = q.single(app.world()).unwrap();
+        assert!(st.grounded_wheels >= 4, "катки должны опираться на лёд: {}", st.grounded_wheels);
+        assert!(
+            st.surface_traction <= 0.30,
+            "сцепление на льду должно падать до <=0.30, получено {}",
+            st.surface_traction
+        );
     }
 }

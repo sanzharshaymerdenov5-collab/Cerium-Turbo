@@ -239,6 +239,9 @@ fn spawn_chunk(
     Some(e.id())
 }
 
+/// Максимум пересобираемых чанков за один кадр (плавный FPS при разрушениях в WASM).
+pub const MAX_CHUNKS_PER_FRAME: usize = 6;
+
 fn rebuild_dirty_chunks(
     mut commands: Commands,
     mut world: ResMut<VoxelWorld>,
@@ -249,7 +252,10 @@ fn rebuild_dirty_chunks(
     if world.dirty.is_empty() {
         return;
     }
-    let dirty: Vec<IVec3> = world.dirty.drain().collect();
+    let dirty: Vec<IVec3> = world.dirty.iter().take(MAX_CHUNKS_PER_FRAME).copied().collect();
+    for c in &dirty {
+        world.dirty.remove(c);
+    }
     for c in dirty {
         let data = chunk_mesh(&world.grid, c);
         let collider = chunk_collider(&world.grid, c);

@@ -1,0 +1,48 @@
+(
+    id: "frozen_fort",
+    name: "Зимний укрепрайон",
+    description: "Заснеженные высоты, бетонные доты и замёрзшее озеро в центре (сцепление на льду падает в 4 раза!).",
+    biome: Winter,
+    voxel_size: 0.5,
+    dims: (256, 36, 448),
+    base_height_m: 3.0,
+    spawn_xz: (0.0, 96.0),
+    spawn_yaw_deg: 0.0,
+    flat_zones: [
+        (min_xz: (-16.0, 76.0), max_xz: (16.0, 108.0)),
+        (min_xz: (-36.0, -106.0), max_xz: (36.0, -72.0)),
+    ],
+    ice_zones: [
+        // Центральное замёрзшее озеро (Material::Ice -> traction 0.25).
+        (min_xz: (-26.0, -28.0), max_xz: (26.0, 28.0)),
+    ],
+    hills: [
+        (center_xz: (-46.0, 30.0), radius_m: 22.0, height_m: 6.0),
+        (center_xz: (46.0, 30.0), radius_m: 22.0, height_m: 6.0),
+        (center_xz: (-46.0, -40.0), radius_m: 22.0, height_m: 6.5),
+        (center_xz: (46.0, -40.0), radius_m: 22.0, height_m: 6.5),
+    ],
+    ditches: [],
+    structures: [
+        // Береговые укрепления у озера.
+        Wall(min_xz: (-20.0, 48.0), max_xz: (-8.0, 50.0), height_m: 1.8, kind: Sandbag),
+        Wall(min_xz: (8.0, 48.0), max_xz: (20.0, 50.0), height_m: 1.8, kind: Concrete),
+        House(center_xz: (-36.0, -2.0), size_xz: (9.0, 9.0), height_m: 4.0, kind: Concrete),
+        House(center_xz: (36.0, 2.0), size_xz: (9.0, 9.0), height_m: 4.0, kind: Wood),
+        Wall(min_xz: (-18.0, -54.0), max_xz: (-6.0, -52.0), height_m: 2.2, kind: Concrete),
+        Wall(min_xz: (6.0, -54.0), max_xz: (18.0, -52.0), height_m: 2.2, kind: Wood),
+    ],
+    targets: [],
+    enemy_spawns: [
+        (pos_xz: (-28.0, -86.0), yaw_deg: 180.0, tank_id: Some("t34_85")),
+        (pos_xz: (0.0, -94.0), yaw_deg: 180.0, tank_id: Some("is_3")),
+        (pos_xz: (28.0, -86.0), yaw_deg: 180.0, tank_id: Some("su_100")),
+    ],
+    waypoints: [
+        (-34.0, -18.0),
+        (34.0, -18.0),
+        (0.0, 0.0),
+        (-34.0, 40.0),
+        (34.0, 40.0),
+    ],
+)

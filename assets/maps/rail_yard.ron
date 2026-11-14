@@ -1,0 +1,50 @@
+(
+    id: "rail_yard",
+    name: "Промзона / ЖД узел",
+    description: "Товарная станция: ряды разрушаемых вагонов, кирпичные цеха, складские навесы и стрелки между путями.",
+    biome: Industrial,
+    voxel_size: 0.5,
+    dims: (256, 36, 448),
+    base_height_m: 2.5,
+    spawn_xz: (0.0, 92.0),
+    spawn_yaw_deg: 0.0,
+    flat_zones: [
+        (min_xz: (-58.0, -102.0), max_xz: (58.0, 102.0)),
+    ],
+    ice_zones: [],
+    hills: [],
+    ditches: [
+        // Смотровые канавы на подъездных путях по краям.
+        (min_xz: (-52.0, 20.0), max_xz: (-46.0, 42.0), depth_m: 1.0),
+        (min_xz: (46.0, -42.0), max_xz: (52.0, -20.0), depth_m: 1.0),
+    ],
+    structures: [
+        // Параллельные составы товарных вагонов (длинные узкие постройки из дерева и кирпича).
+        House(center_xz: (-16.0, 36.0), size_xz: (4.5, 16.0), height_m: 3.6, kind: Wood),
+        House(center_xz: (-16.0, 12.0), size_xz: (4.5, 16.0), height_m: 3.6, kind: Wood),
+        House(center_xz: (-16.0, -22.0), size_xz: (4.5, 16.0), height_m: 3.6, kind: Wood),
+        House(center_xz: (16.0, 26.0), size_xz: (4.5, 16.0), height_m: 3.6, kind: Wood),
+        House(center_xz: (16.0, -8.0), size_xz: (4.5, 16.0), height_m: 3.6, kind: Brick),
+        House(center_xz: (16.0, -34.0), size_xz: (4.5, 16.0), height_m: 3.6, kind: Wood),
+        // Кирпичные и бетонные цеха депо по флангам.
+        House(center_xz: (-38.0, 0.0), size_xz: (12.0, 18.0), height_m: 5.5, kind: Brick),
+        House(center_xz: (38.0, 4.0), size_xz: (12.0, 18.0), height_m: 5.5, kind: Concrete),
+        // Бетонные погрузочные рампы.
+        Wall(min_xz: (-6.0, 56.0), max_xz: (6.0, 58.0), height_m: 1.5, kind: Concrete),
+        Wall(min_xz: (-8.0, -56.0), max_xz: (8.0, -54.0), height_m: 1.8, kind: Concrete),
+    ],
+    targets: [],
+    enemy_spawns: [
+        (pos_xz: (-32.0, -80.0), yaw_deg: 180.0, tank_id: Some("m24_chaffee")),
+        (pos_xz: (0.0, -86.0), yaw_deg: 180.0, tank_id: Some("tiger_1")),
+        (pos_xz: (32.0, -80.0), yaw_deg: 180.0, tank_id: Some("t34_85")),
+    ],
+    waypoints: [
+        (0.0, 35.0),
+        (0.0, -15.0),
+        (-28.0, -35.0),
+        (28.0, -35.0),
+        (-28.0, 45.0),
+        (28.0, 45.0),
+    ],
+)

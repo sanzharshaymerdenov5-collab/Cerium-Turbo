@@ -1,0 +1,50 @@
+(
+    id: "city_ruins",
+    name: "Разрушенный город",
+    description: "Плотные кварталы кирпичных и бетонных домов с простреливаемыми улицами и флангами.",
+    biome: City,
+    voxel_size: 0.5,
+    dims: (256, 36, 384),
+    base_height_m: 2.5,
+    spawn_xz: (0.0, 74.0),
+    spawn_yaw_deg: 0.0,
+    flat_zones: [
+        (min_xz: (-56.0, -86.0), max_xz: (56.0, 86.0)),
+    ],
+    ice_zones: [],
+    hills: [],
+    ditches: [],
+    structures: [
+        // Центральная площадь с баррикадами.
+        Wall(min_xz: (-10.0, 42.0), max_xz: (-2.0, 43.5), height_m: 1.6, kind: Sandbag),
+        Wall(min_xz: (2.0, 42.0), max_xz: (10.0, 43.5), height_m: 1.6, kind: Sandbag),
+        Wall(min_xz: (-12.0, -18.0), max_xz: (-3.0, -16.5), height_m: 2.2, kind: Brick),
+        Wall(min_xz: (3.0, -18.0), max_xz: (12.0, -16.5), height_m: 2.2, kind: Concrete),
+        // Левый квартал (разрушаемые дома).
+        House(center_xz: (-26.0, 32.0), size_xz: (12.0, 14.0), height_m: 6.0, kind: Brick),
+        House(center_xz: (-46.0, 12.0), size_xz: (10.0, 12.0), height_m: 5.5, kind: Concrete),
+        House(center_xz: (-24.0, -6.0), size_xz: (12.0, 12.0), height_m: 6.5, kind: Brick),
+        House(center_xz: (-46.0, -34.0), size_xz: (12.0, 12.0), height_m: 5.5, kind: Brick),
+        House(center_xz: (-24.0, -48.0), size_xz: (11.0, 13.0), height_m: 6.0, kind: Concrete),
+        // Правый квартал.
+        House(center_xz: (26.0, 30.0), size_xz: (12.0, 13.0), height_m: 6.0, kind: Brick),
+        House(center_xz: (46.0, 8.0), size_xz: (10.0, 12.0), height_m: 5.5, kind: Concrete),
+        House(center_xz: (24.0, -8.0), size_xz: (12.0, 12.0), height_m: 6.5, kind: Brick),
+        House(center_xz: (46.0, -36.0), size_xz: (12.0, 12.0), height_m: 5.5, kind: Concrete),
+        House(center_xz: (24.0, -48.0), size_xz: (11.0, 13.0), height_m: 6.0, kind: Brick),
+    ],
+    targets: [],
+    enemy_spawns: [
+        (pos_xz: (-36.0, -64.0), yaw_deg: 180.0, tank_id: Some("m24_chaffee")),
+        (pos_xz: (0.0, -72.0), yaw_deg: 180.0, tank_id: Some("tiger_1")),
+        (pos_xz: (36.0, -64.0), yaw_deg: 180.0, tank_id: Some("t34_85")),
+    ],
+    waypoints: [
+        (0.0, 12.0),
+        (-36.0, 12.0),
+        (36.0, 12.0),
+        (-36.0, -32.0),
+        (36.0, -32.0),
+        (0.0, -34.0),
+    ],
+)

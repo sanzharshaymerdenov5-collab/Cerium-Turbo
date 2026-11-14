@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use crate::ballistics::penetration::penetration_at;
 use crate::core::{DamageRulesMode, GameState, SelectedMap, SelectedTank, TankId};
 use crate::damage::{ModuleKind, TankModules};
+use crate::maps::{MapSpec, available_maps, load_map_spec};
 use crate::tank::armor::{hull_plate_specs, turret_plate_specs};
 use crate::tank::{
     HangarPreviewTank, TankSpec, available_tanks, load_tank_spec, spawn_preview_tank,
@@ -50,6 +51,7 @@ pub struct HangarCamera;
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub enum HangarButton {
     SelectTank(usize),
+    SelectMap(usize),
     ToggleXray,
     StartBattle,
 }
@@ -62,7 +64,7 @@ pub enum HangarLabel {
 
 fn format_hangar_info(
     spec: &TankSpec,
-    map_id: &str,
+    map_spec: &MapSpec,
     mode: DamageRulesMode,
     xray: bool,
 ) -> String {
@@ -87,7 +89,9 @@ fn format_hangar_info(
          Пробитие: {:.0} мм (100 м) / {:.0} мм (500 м)  |  Рикошет >{:.0}°\n\
          Броня корпуса: ВЛД {:.0}@{:.0}° / НЛД {:.0} / Борт {:.0} / Корма {:.0} мм\n\
          Броня башни/рубки: Лоб {:.0} / Борт {:.0} / Корма {:.0} мм\n\
-         Режим: {}  |  Карта: {}  |  Рентген [V]: {}",
+         Режим: {}  |  Рентген [V]: {}\n\
+         КАРТА [Q/E]: {} [{}]\n\
+         {}",
         spec.name,
         spec.nation,
         spec.max_hp,
@@ -115,8 +119,10 @@ fn format_hangar_info(
         armor.turret_side_mm,
         armor.turret_rear_mm,
         mode.ru_label(),
-        map_id,
         if xray { "ВКЛ" } else { "ВЫКЛ" },
+        map_spec.name,
+        map_spec.biome.ru_name(),
+        map_spec.description,
     )
 }
 
@@ -334,7 +340,11 @@ pub fn setup_hangar(
     ));
 
     let tanks = available_tanks();
-    let info = format_hangar_info(&spec, &selected_map.0, *mode, view.xray_armor);
+    let maps = available_maps();
+    let map_spec = load_map_spec(&selected_map.0)
+        .or_else(|| maps.first().cloned())
+        .expect("default map");
+    let info = format_hangar_info(&spec, &map_spec, *mode, view.xray_armor);
 
     commands
         .spawn((
@@ -352,7 +362,7 @@ pub fn setup_hangar(
             root.spawn(Node {
                 width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(10.0),
+                row_gap: Val::Px(8.0),
                 ..default()
             })
             .with_children(|top| {
@@ -370,7 +380,7 @@ pub fn setup_hangar(
                 .with_children(|p| {
                     p.spawn((
                         Text::new(
-                            "CERIUM-TURBO  •  ЭТАП 4: ПАРК ИЗ 5 ИСТОРИЧЕСКИХ ТАНКОВ (только сплошной SolidAP)",
+                            "CERIUM-TURBO  •  ЭТАП 5: 5 КАРТ И 5 ТАНКОВ (только сплошной SolidAP)",
                         ),
                         TextFont::from_font_size(18.0),
                         TextColor(Color::srgb(0.92, 0.95, 0.88)),
@@ -412,7 +422,7 @@ pub fn setup_hangar(
                             Interaction::default(),
                             HangarButton::SelectTank(i),
                             Node {
-                                padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+                                padding: UiRect::axes(Val::Px(12.0), Val::Px(7.0)),
                                 border: UiRect::all(Val::Px(if active { 2.0 } else { 1.0 })),
                                 ..default()
                             },
@@ -441,12 +451,53 @@ pub fn setup_hangar(
                         });
                     }
                 });
+
+                // Кнопки выбора 5 карт.
+                top.spawn(Node {
+                    width: Val::Percent(100.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(6.0),
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|row| {
+                    for (i, m) in maps.iter().enumerate() {
+                        let active = m.id == selected_map.0;
+                        row.spawn((
+                            Interaction::default(),
+                            HangarButton::SelectMap(i),
+                            Node {
+                                padding: UiRect::axes(Val::Px(11.0), Val::Px(6.0)),
+                                border: UiRect::all(Val::Px(if active { 2.0 } else { 1.0 })),
+                                ..default()
+                            },
+                            BackgroundColor(if active {
+                                Color::srgb(0.16, 0.28, 0.38)
+                            } else {
+                                Color::srgba(0.06, 0.08, 0.10, 0.84)
+                            }),
+                            BorderColor::all(if active {
+                                Color::srgb(0.45, 0.78, 0.96)
+                            } else {
+                                Color::srgb(0.26, 0.32, 0.38)
+                            }),
+                        ))
+                        .with_children(|b| {
+                            b.spawn((
+                                Text::new(format!("Карта: {}", m.name)),
+                                TextFont::from_font_size(13.0),
+                                TextColor(Color::srgb(0.86, 0.93, 0.98)),
+                            ));
+                        });
+                    }
+                });
             });
 
             root.spawn((
                 Node {
-                    max_width: Val::Px(510.0),
-                    padding: UiRect::all(Val::Px(16.0)),
+                    max_width: Val::Px(530.0),
+                    padding: UiRect::all(Val::Px(14.0)),
                     border: UiRect::all(Val::Px(1.0)),
                     ..default()
                 },
@@ -457,7 +508,7 @@ pub fn setup_hangar(
                 p.spawn((
                     HangarLabel::Info,
                     Text::new(info),
-                    TextFont::from_font_size(14.0),
+                    TextFont::from_font_size(13.5),
                     TextColor(Color::srgb(0.86, 0.90, 0.94)),
                 ));
             });
@@ -481,7 +532,7 @@ pub fn setup_hangar(
                 .with_children(|h| {
                     h.spawn((
                         Text::new(
-                            "ПКМ/ЛКМ: осмотр камеры  |  Колёсико: зум  |  1-5 / ←→: танк  |  V: рентген",
+                            "ПКМ/ЛКМ: камера  |  Колёсико: зум  |  1-5 / ←→: танк  |  Q / E: карта  |  V: рентген",
                         ),
                         TextFont::from_font_size(13.0),
                         TextColor(Color::srgb(0.75, 0.80, 0.86)),
@@ -532,7 +583,7 @@ pub fn update_hangar(
     scroll: Res<AccumulatedMouseScroll>,
     mut next_state: ResMut<NextState<GameState>>,
     mut selected_tank: ResMut<SelectedTank>,
-    selected_map: Res<SelectedMap>,
+    mut selected_map: ResMut<SelectedMap>,
     mode: Res<DamageRulesMode>,
     mut view: ResMut<HangarViewState>,
     mut assets_pair: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>, Res<VoxelAssets>),
@@ -552,6 +603,13 @@ pub fn update_hangar(
         .unwrap_or(0);
     let mut new_idx: Option<usize> = None;
 
+    let maps = available_maps();
+    let cur_map_idx = maps
+        .iter()
+        .position(|m| m.id == selected_map.0)
+        .unwrap_or(0);
+    let mut new_map_idx: Option<usize> = None;
+
     let digit_keys = [
         KeyCode::Digit1,
         KeyCode::Digit2,
@@ -570,6 +628,12 @@ pub fn update_hangar(
     if keys.just_pressed(KeyCode::ArrowLeft) && !tanks.is_empty() {
         new_idx = Some((cur_idx + tanks.len() - 1) % tanks.len());
     }
+    if keys.just_pressed(KeyCode::KeyE) && !maps.is_empty() {
+        new_map_idx = Some((cur_map_idx + 1) % maps.len());
+    }
+    if keys.just_pressed(KeyCode::KeyQ) && !maps.is_empty() {
+        new_map_idx = Some((cur_map_idx + maps.len() - 1) % maps.len());
+    }
 
     let mut ui_hovered = false;
     let mut toggle_xray = keys.just_pressed(KeyCode::KeyV);
@@ -582,6 +646,7 @@ pub fn update_hangar(
         if *interaction == Interaction::Pressed {
             match *btn {
                 HangarButton::SelectTank(i) if i < tanks.len() => new_idx = Some(i),
+                HangarButton::SelectMap(i) if i < maps.len() => new_map_idx = Some(i),
                 HangarButton::ToggleXray => toggle_xray = true,
                 HangarButton::StartBattle => start = true,
                 _ => {}
@@ -592,6 +657,11 @@ pub fn update_hangar(
     if let Some(i) = new_idx {
         if tanks[i].id != selected_tank.0.0 {
             selected_tank.0 = TankId(tanks[i].id.clone());
+        }
+    }
+    if let Some(i) = new_map_idx {
+        if maps[i].id != selected_map.0 {
+            selected_map.0 = maps[i].id.clone();
         }
     }
     if toggle_xray {
@@ -626,6 +696,16 @@ pub fn update_hangar(
         .cloned()
         .unwrap_or_else(|| load_tank_spec("t34_85").expect("t34_85"));
 
+    let active_map_idx = maps
+        .iter()
+        .position(|m| m.id == selected_map.0)
+        .unwrap_or(0);
+    let map_spec = maps
+        .get(active_map_idx)
+        .cloned()
+        .or_else(|| load_map_spec("proving_grounds"))
+        .expect("default map");
+
     // Подсветка кнопок.
     for (btn, interaction, mut bg, mut border) in &mut btns {
         match *btn {
@@ -642,6 +722,21 @@ pub fn update_hangar(
                     Color::srgb(0.55, 0.86, 0.45)
                 } else {
                     Color::srgb(0.28, 0.34, 0.40)
+                });
+            }
+            HangarButton::SelectMap(i) => {
+                let active = i == active_map_idx;
+                *bg = if active {
+                    BackgroundColor(Color::srgb(0.16, 0.28, 0.38))
+                } else if *interaction == Interaction::Hovered {
+                    BackgroundColor(Color::srgb(0.13, 0.18, 0.24))
+                } else {
+                    BackgroundColor(Color::srgba(0.06, 0.08, 0.10, 0.84))
+                };
+                *border = BorderColor::all(if active {
+                    Color::srgb(0.45, 0.78, 0.96)
+                } else {
+                    Color::srgb(0.26, 0.32, 0.38)
                 });
             }
             HangarButton::ToggleXray => {
@@ -666,7 +761,7 @@ pub fn update_hangar(
     for (lbl, mut txt) in &mut labels {
         match *lbl {
             HangarLabel::Info => {
-                txt.0 = format_hangar_info(&spec, &selected_map.0, *mode, view.xray_armor);
+                txt.0 = format_hangar_info(&spec, &map_spec, *mode, view.xray_armor);
             }
             HangarLabel::ToggleXray => {
                 txt.0 = if view.xray_armor {

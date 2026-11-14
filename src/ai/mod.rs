@@ -176,7 +176,7 @@ fn ai_control_system(
 
         let player_aim_center = player_pos + Vec3::Y * 1.1;
         let dist_player = pos.distance(player_pos);
-        let los = dist_player < 420.0 && has_line_of_sight(&world.grid, bot_eye, player_aim_center);
+        let los = dist_player < 500.0 && has_line_of_sight(&world.grid, bot_eye, player_aim_center);
 
         if los {
             brain.last_seen_player = Some(player_pos);
