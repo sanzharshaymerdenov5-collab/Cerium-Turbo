@@ -1,0 +1,74 @@
+[package]
+name = "cerium_turbo"
+version = "0.1.0"
+edition = "2024"
+description = "Cerium-Turbo: воксельная танковая игра на Rust (Bevy + Avian3D)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "cerium_turbo"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cerium_turbo"
+path = "src/main.rs"
+
+[dependencies]
+bevy = { version = "0.20", default-features = false, features = [
+    "std",
+    "async_executor",
+    "bevy_asset",
+    "bevy_log",
+    "bevy_state",
+    "bevy_window",
+    "bevy_winit",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_pbr",
+    "bevy_light",
+    "bevy_camera",
+    "bevy_mesh",
+    "bevy_image",
+    "bevy_shader",
+    "bevy_material",
+    "bevy_color",
+    "bevy_text",
+    "bevy_ui",
+    "bevy_ui_render",
+    "default_font",
+    "png",
+    "tonemapping_luts",
+    "zstd_rust",
+] }
+avian3d = { version = "0.8", default-features = false, features = [
+    "3d",
+    "parry-f32",
+    "collider-from-mesh",
+] }
+block-mesh = "0.2"
+ndshape = "0.3"
+dot_vox = "5.2"
+serde = { version = "1", features = ["derive"] }
+ron = "0.10"
+
+# Нативная сборка: многопоточность и X11 (Wayland подхватится через winit при необходимости).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bevy = { version = "0.20", default-features = false, features = ["multi_threaded", "x11"] }
+avian3d = { version = "0.8", default-features = false, features = ["parallel"] }
+
+# Веб-сборка (GitHub Pages): WebGL2, однопоточный WASM.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bevy = { version = "0.20", default-features = false, features = ["web", "webgl2"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1

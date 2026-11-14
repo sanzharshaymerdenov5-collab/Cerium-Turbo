@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cerium-Turbo — Воксельный танковый симулятор</title>
+  <link data-trunk rel="rust" data-wasm-opt="z" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #14181f;
+      color: #e6edf3;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    #bevy {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      outline: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="bevy" oncontextmenu="return false;"></canvas>
+</body>
+</html>
