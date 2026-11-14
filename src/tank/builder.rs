@@ -2,8 +2,34 @@
 
 use bevy::math::{IVec3, UVec3, Vec3};
 
-use super::spec::ProceduralTankProfile;
+use super::spec::{HullShape, ProceduralTankProfile, TurretShape};
+use crate::core::Team;
 use crate::voxel::{Material, VoxelGrid};
+
+/// Цветовая схема вокселей танка по команде.
+#[derive(Debug, Clone, Copy)]
+pub struct TankPalette {
+    pub armor: Material,
+    pub dark: Material,
+    pub mark: Material,
+}
+
+impl TankPalette {
+    pub fn for_team(team: Team) -> Self {
+        match team {
+            Team::Player => Self {
+                armor: Material::TankOlive,
+                dark: Material::TankDark,
+                mark: Material::TankStar,
+            },
+            Team::Enemy => Self {
+                armor: Material::EnemyArmor,
+                dark: Material::EnemyDark,
+                mark: Material::EnemyMark,
+            },
+        }
+    }
+}
 
 /// Три части визуальной модели танка.
 #[derive(Debug, Clone)]
@@ -40,8 +66,14 @@ pub fn build_from_fn(
     grid
 }
 
-/// Строит воксельные части танка по профилю (Т-34-85 и будущие танки Этапа 4).
+/// Строит воксельные части танка по профилю (палитра игрока по умолчанию).
 pub fn build_tank_parts(p: &ProceduralTankProfile) -> TankVoxelParts {
+    build_tank_parts_for_team(p, Team::Player)
+}
+
+/// Строит воксельные части танка с учётом команды (окраска игрока/врага) и формы корпуса/башни.
+pub fn build_tank_parts_for_team(p: &ProceduralTankProfile, team: Team) -> TankVoxelParts {
+    let pal = TankPalette::for_team(team);
     let hl = p.hull_length * 0.5;
     let hw = p.hull_width * 0.5;
     let inner_w = hw - p.track_width;
@@ -84,24 +116,60 @@ pub fn build_tank_parts(p: &ProceduralTankProfile) -> TankVoxelParts {
                 && pt.y <= p.track_height + p.voxel_size * 1.1
                 && pt.z.abs() <= hl - 0.1
             {
-                return Some(Material::TankDark);
+                return Some(pal.dark);
             }
 
-            // Бронекорпус между гусеницами (клиренс ~0.35 м, наклонные ВЛД/НЛД и борта).
+            // Бронекорпус между гусеницами.
             let clearance = 0.35;
             if pt.y < clearance || pt.y > p.deck_height {
                 return None;
             }
-            // Скошенные верхние борта (Т-34).
-            let slope_narrow = ((pt.y - 0.7).max(0.0)) * 0.32;
+            let slope_narrow = match p.hull_shape {
+                HullShape::SlopedT34 | HullShape::Casemate => ((pt.y - 0.7).max(0.0)) * 0.32,
+                HullShape::PikeNose => ((pt.y - 0.75).max(0.0)) * 0.25,
+                HullShape::LightBox | HullShape::HeavyBox => 0.0,
+            };
             if ax > inner_w - slope_narrow {
                 return None;
             }
-            // ВЛД (верхняя лобовая деталь под углом ~60°) и НЛД.
-            let front_z = if pt.y >= 0.65 {
-                -hl + (pt.y - 0.65) * 1.15
-            } else {
-                -hl + (0.65 - pt.y) * 0.7
+
+            let front_z = match p.hull_shape {
+                HullShape::SlopedT34 => {
+                    if pt.y >= 0.65 {
+                        -hl + (pt.y - 0.65) * 1.15
+                    } else {
+                        -hl + (0.65 - pt.y) * 0.7
+                    }
+                }
+                HullShape::PikeNose => {
+                    let v = ax * 0.45;
+                    if pt.y >= 0.7 {
+                        -hl + v + (pt.y - 0.7) * 1.05
+                    } else {
+                        -hl + v + (0.7 - pt.y) * 0.65
+                    }
+                }
+                HullShape::Casemate => {
+                    if pt.y >= 0.65 {
+                        -hl + (pt.y - 0.65) * 0.95
+                    } else {
+                        -hl + (0.65 - pt.y) * 0.65
+                    }
+                }
+                HullShape::LightBox => {
+                    if pt.y >= 0.65 {
+                        -hl + (pt.y - 0.65) * 0.7
+                    } else {
+                        -hl + (0.65 - pt.y) * 0.4
+                    }
+                }
+                HullShape::HeavyBox => {
+                    if pt.y >= 0.75 {
+                        -hl + 0.35 + (pt.y - 0.75) * 0.12
+                    } else {
+                        -hl + (0.75 - pt.y) * 0.85
+                    }
+                }
             };
             let rear_z = hl - (pt.y - clearance).max(0.0) * 0.25;
             if pt.z < front_z || pt.z > rear_z {
@@ -109,13 +177,13 @@ pub fn build_tank_parts(p: &ProceduralTankProfile) -> TankVoxelParts {
             }
             // Решётка МТО сверху сзади.
             if pt.y > p.deck_height - p.voxel_size * 1.2 && pt.z > 0.6 && ax < inner_w * 0.65 {
-                return Some(Material::TankDark);
+                return Some(pal.dark);
             }
-            Some(Material::TankOlive)
+            Some(pal.armor)
         },
     );
 
-    // 2. Башня (вытянутый шестигранник/эллипсоид + командирская башенка + звезда).
+    // 2. Башня (или рубка ПТ-САУ).
     let rx = p.turret_radius_x;
     let rz = p.turret_radius_z;
     let th = p.turret_height;
@@ -124,32 +192,45 @@ pub fn build_tank_parts(p: &ProceduralTankProfile) -> TankVoxelParts {
         Vec3::new(rx + 0.1, th + 0.3, rz + 0.25),
         p.voxel_size,
         |pt| {
-            // Командирская башенка слева сзади.
+            // Командирская башенка.
             let cup = Vec3::new(-rx * 0.35, th, rz * 0.25);
             if pt.y >= th && pt.y <= th + 0.22 {
                 let d = ((pt.x - cup.x).powi(2) + (pt.z - cup.z).powi(2)).sqrt();
                 if d <= 0.28 {
-                    return Some(Material::TankDark);
+                    return Some(pal.dark);
                 }
             }
             if pt.y < 0.0 || pt.y > th {
                 return None;
             }
-            // Сужение башни кверху.
-            let k = 1.0 - (pt.y / th) * 0.18;
-            let nx = pt.x / (rx * k);
-            let nz = (pt.z - 0.05) / (rz * k);
-            if nx * nx + nz * nz > 1.0 {
+            let inside = match p.turret_shape {
+                TurretShape::BoxHeavy => {
+                    let k = 1.0 - (pt.y / th) * 0.08;
+                    pt.x.abs() <= rx * k && (pt.z - 0.05).abs() <= rz * k
+                }
+                TurretShape::FixedCasemate => {
+                    let k = 1.0 - (pt.y / th) * 0.22;
+                    let front_slope = -rz + (pt.y / th) * 0.65;
+                    pt.x.abs() <= rx * k && pt.z >= front_slope && pt.z <= rz
+                }
+                TurretShape::HexCast | TurretShape::CompactLight | TurretShape::RoundedDome => {
+                    let k = 1.0 - (pt.y / th) * 0.20;
+                    let nx = pt.x / (rx * k);
+                    let nz = (pt.z - 0.05) / (rz * k);
+                    nx * nx + nz * nz <= 1.0
+                }
+            };
+            if !inside {
                 return None;
             }
-            // Красная звезда на бортах башни.
+            // Опознавательный знак на бортах башни.
             if (pt.y - th * 0.5).abs() < 0.18
                 && pt.z.abs() < 0.22
-                && pt.x.abs() > rx * k * 0.78
+                && pt.x.abs() > rx * 0.72
             {
-                return Some(Material::TankStar);
+                return Some(pal.mark);
             }
-            Some(Material::TankOlive)
+            Some(pal.armor)
         },
     );
 
@@ -161,11 +242,9 @@ pub fn build_tank_parts(p: &ProceduralTankProfile) -> TankVoxelParts {
         Vec3::new(0.35, 0.25, 0.2),
         p.gun_voxel_size,
         |pt| {
-            // Маска орудия у основания.
             if pt.z >= -0.35 && pt.z <= 0.15 && pt.x.abs() <= 0.30 && pt.y.abs() <= 0.20 {
-                return Some(Material::TankDark);
+                return Some(pal.dark);
             }
-            // Ствол (цилиндр вдоль −Z).
             if pt.z <= 0.0 && pt.z >= -bl {
                 let r = pt.x.hypot(pt.y);
                 if r <= br {

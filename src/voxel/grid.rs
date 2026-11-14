@@ -245,6 +245,8 @@ impl VoxelGrid {
 pub struct VoxelWorld {
     pub grid: VoxelGrid,
     pub dirty: HashSet<IVec3>,
+    /// Области недавних разрушений построек `(центр, радиус)` для обновления навигационной сетки ИИ.
+    pub carved_regions: Vec<(Vec3, f32)>,
 }
 
 /// Результат разрушения.
@@ -261,6 +263,7 @@ impl VoxelWorld {
         Self {
             grid,
             dirty: HashSet::new(),
+            carved_regions: Vec::new(),
         }
     }
 
@@ -322,6 +325,9 @@ impl VoxelWorld {
                     }
                 }
             }
+        }
+        if !result.removed.is_empty() {
+            self.carved_regions.push((center, radius));
         }
         let removed: Vec<IVec3> = result.removed.iter().map(|(v, _)| *v).collect();
         for v in removed {

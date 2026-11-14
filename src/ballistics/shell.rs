@@ -19,6 +19,10 @@ impl ShellType {
     pub const ALL: [ShellType; 1] = [ShellType::SolidAP];
 }
 
+fn default_arcade_damage() -> f32 {
+    180.0
+}
+
 /// Параметры снаряда (из `.ron` танка).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ShellSpec {
@@ -34,6 +38,9 @@ pub struct ShellSpec {
     pub normalization_deg: f32,
     /// Угол встречи, выше которого — рикошет, град.
     pub ricochet_deg: f32,
+    /// Урон по общему ХП в аркадном режиме WoT (Этап 3+).
+    #[serde(default = "default_arcade_damage")]
+    pub arcade_damage: f32,
 }
 
 #[cfg(test)]

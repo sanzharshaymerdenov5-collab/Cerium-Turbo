@@ -69,10 +69,33 @@ pub struct TargetSpec {
     pub size_xy: (f32, f32),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum MapBiome {
+    #[default]
+    Temperate,
+    City,
+    Desert,
+    Winter,
+    Industrial,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnemySpawnSpec {
+    pub pos_xz: (f32, f32),
+    #[serde(default)]
+    pub yaw_deg: f32,
+    #[serde(default)]
+    pub tank_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MapSpec {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub biome: MapBiome,
     pub voxel_size: f32,
     pub dims: (u32, u32, u32),
     pub base_height_m: f32,
@@ -83,6 +106,10 @@ pub struct MapSpec {
     pub ditches: Vec<DitchSpec>,
     pub structures: Vec<StructureSpec>,
     pub targets: Vec<TargetSpec>,
+    #[serde(default)]
+    pub enemy_spawns: Vec<EnemySpawnSpec>,
+    #[serde(default)]
+    pub waypoints: Vec<(f32, f32)>,
 }
 
 impl MapSpec {
@@ -98,4 +125,11 @@ pub fn load_map_spec(id: &str) -> Option<MapSpec> {
         "proving_grounds" => MapSpec::from_ron(PROVING_GROUNDS_RON).ok(),
         _ => None,
     }
+}
+
+pub fn available_maps() -> Vec<MapSpec> {
+    ["proving_grounds"]
+        .iter()
+        .filter_map(|id| load_map_spec(id))
+        .collect()
 }

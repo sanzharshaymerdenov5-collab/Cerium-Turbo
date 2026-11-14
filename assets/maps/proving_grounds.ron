@@ -1,6 +1,8 @@
 (
     id: "proving_grounds",
     name: "Полигон",
+    description: "Учебный танкодром со стрельбищем (50/150/250 м), постройками и полосой препятствий.",
+    biome: Temperate,
     voxel_size: 0.5,
     dims: (256, 36, 576),
     base_height_m: 3.0,
@@ -46,5 +48,18 @@
         (name: "250м • 60мм @ 30°", pos_xz: (-11.0, -135.0), thickness_mm: 60.0, slope_deg: 30.0, size_xy: (3.2, 2.4)),
         (name: "250м • 80мм @ 60°", pos_xz: (0.0, -135.0), thickness_mm: 80.0, slope_deg: 60.0, size_xy: (3.2, 2.4)),
         (name: "250м • 45мм @ 73° (рикошет)", pos_xz: (11.0, -135.0), thickness_mm: 45.0, slope_deg: 73.0, size_xy: (3.2, 2.4)),
+    ],
+    enemy_spawns: [
+        (pos_xz: (-20.0, -55.0), yaw_deg: 180.0, tank_id: Some("t34_85")),
+        (pos_xz: (24.0, -45.0), yaw_deg: 180.0, tank_id: Some("t34_85")),
+        (pos_xz: (0.0, -108.0), yaw_deg: 180.0, tank_id: Some("t34_85")),
+    ],
+    waypoints: [
+        (-16.0, -15.0),
+        (16.0, -15.0),
+        (-14.0, 25.0),
+        (14.0, 25.0),
+        (-20.0, 48.0),
+        (20.0, 48.0),
     ],
 )

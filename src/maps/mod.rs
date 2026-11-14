@@ -7,15 +7,19 @@ use avian3d::prelude::*;
 use bevy::math::{IVec3, UVec3};
 use bevy::prelude::*;
 
+use crate::ai::{AiBrain, VoxelNavGrid};
 use crate::ballistics::{ArmorPlate, HitLog, TargetInfo};
-use crate::core::{GameState, SelectedMap, SelectedTank};
+use crate::core::{BattleStatus, GameState, SelectedMap, SelectedTank};
 use crate::tank::{load_tank_spec, spawn_battle_camera, spawn_tank};
 use crate::voxel::{
     ChunkEntities, Material, VoxelAssets, VoxelGrid, VoxelWorld, spawn_world_chunks,
     voxel_model_bundle,
 };
 pub use generate::{generate_map_grid, terrain_height_m};
-pub use spec::{MapSpec, PROVING_GROUNDS_RON, TargetSpec, load_map_spec};
+pub use spec::{
+    EnemySpawnSpec, MapBiome, MapSpec, PROVING_GROUNDS_RON, TargetSpec, available_maps,
+    load_map_spec,
+};
 
 pub struct MapPlugin;
 
@@ -41,7 +45,6 @@ fn build_target_plate_grid(size_xy: (f32, f32)) -> VoxelGrid {
         IVec3::new(nx as i32 - 1, ny as i32 - 1, 1),
         Material::TargetSteel,
     );
-    // Контрастная мишень в центре плиты.
     let cx = nx as i32 / 2;
     let cy = ny as i32 / 2;
     for dy in -1..=1 {
@@ -61,18 +64,28 @@ fn setup_battle_scene(
     assets: Res<VoxelAssets>,
     mut chunks: ResMut<ChunkEntities>,
     mut log: ResMut<HitLog>,
+    mut status: ResMut<BattleStatus>,
 ) {
     *log = HitLog::default();
+    *status = BattleStatus::Ongoing;
 
     let map_spec = load_map_spec(&selected_map.0)
         .unwrap_or_else(|| MapSpec::from_ron(PROVING_GROUNDS_RON).expect("default map"));
     let grid = generate_map_grid(&map_spec);
+    let nav_grid = VoxelNavGrid::from_grid(&grid, VoxelNavGrid::DEFAULT_CELL_M);
     let world = VoxelWorld::new(grid);
 
     spawn_world_chunks(&mut commands, &world, &mut meshes, &assets, &mut chunks);
 
-    // Освещение и небо.
-    commands.insert_resource(ClearColor(Color::srgb(0.58, 0.72, 0.88)));
+    // Освещение и небо по биому.
+    let sky = match map_spec.biome {
+        MapBiome::Temperate => Color::srgb(0.58, 0.72, 0.88),
+        MapBiome::City => Color::srgb(0.48, 0.54, 0.62),
+        MapBiome::Desert => Color::srgb(0.84, 0.78, 0.65),
+        MapBiome::Winter => Color::srgb(0.74, 0.80, 0.88),
+        MapBiome::Industrial => Color::srgb(0.45, 0.49, 0.55),
+    };
+    commands.insert_resource(ClearColor(sky));
     commands.insert_resource(GlobalAmbientLight {
         color: Color::srgb(0.85, 0.90, 1.0),
         brightness: 380.0,
@@ -89,12 +102,10 @@ fn setup_battle_scene(
         DespawnOnExit(GameState::InBattle),
     ));
 
-    // Бронеплиты-мишени (воксельный меш + аналитическая плита ArmorPlate + коллайдер).
+    // Бронеплиты-мишени.
     for t in &map_spec.targets {
         let ground_y = terrain_height_m(&map_spec, t.pos_xz.0, t.pos_xz.1);
         let center = Vec3::new(t.pos_xz.0, ground_y + t.size_xy.1 * 0.5 + 0.35, t.pos_xz.1);
-        // Наклон назад от стрелка (стрелок на +Z, стреляет вдоль −Z; локальная +Z плиты смотрит на +Z,
-        // поворот вокруг −X поднимает нормаль вверх на slope_deg).
         let rot = Quat::from_rotation_x(-t.slope_deg.to_radians());
         let plate_grid = build_target_plate_grid(t.size_xy);
         let vis = commands
@@ -139,5 +150,75 @@ fn setup_battle_scene(
     );
     spawn_battle_camera(&mut commands);
 
+    // Патрульные точки на карте.
+    let waypoints: Vec<Vec3> = map_spec
+        .waypoints
+        .iter()
+        .map(|&(wx, wz)| {
+            let wy = world
+                .grid
+                .surface_height_at(wx, wz)
+                .unwrap_or(map_spec.base_height_m)
+                + 0.3;
+            Vec3::new(wx, wy, wz)
+        })
+        .collect();
+
+    // Вражеские ИИ-танки.
+    for (idx, es) in map_spec.enemy_spawns.iter().enumerate() {
+        let e_spec = es
+            .tank_id
+            .as_deref()
+            .and_then(load_tank_spec)
+            .unwrap_or_else(|| load_tank_spec("t34_85").expect("t34_85"));
+        let ey = world
+            .grid
+            .surface_height_at(es.pos_xz.0, es.pos_xz.1)
+            .unwrap_or(map_spec.base_height_m)
+            + 0.35;
+        let epos = Vec3::new(es.pos_xz.0, ey, es.pos_xz.1);
+        let enemy_ent = spawn_tank(
+            &mut commands,
+            &mut meshes,
+            &assets,
+            e_spec,
+            epos,
+            es.yaw_deg.to_radians(),
+            false,
+        );
+        let mut bot_wps = waypoints.clone();
+        if !bot_wps.is_empty() {
+            let rot_by = idx % bot_wps.len();
+            bot_wps.rotate_left(rot_by);
+        }
+        commands
+            .entity(enemy_ent)
+            .insert(AiBrain::new(bot_wps, (idx as u64 + 1) * 101, epos));
+    }
+
+    commands.insert_resource(nav_grid);
     commands.insert_resource(world);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proving_grounds_enemy_spawns_are_reachable_on_nav_grid() {
+        let spec = MapSpec::from_ron(PROVING_GROUNDS_RON).unwrap();
+        let grid = generate_map_grid(&spec);
+        let nav = VoxelNavGrid::from_grid(&grid, VoxelNavGrid::DEFAULT_CELL_M);
+        let p = Vec3::new(spec.spawn_xz.0, spec.base_height_m, spec.spawn_xz.1);
+        assert!(!spec.enemy_spawns.is_empty());
+        for es in &spec.enemy_spawns {
+            let ep = Vec3::new(es.pos_xz.0, spec.base_height_m, es.pos_xz.1);
+            let path = nav.find_path(p, ep);
+            assert!(
+                !path.is_empty(),
+                "спавн врага {:?} должен быть достижим от игрока",
+                es.pos_xz
+            );
+        }
+    }
 }

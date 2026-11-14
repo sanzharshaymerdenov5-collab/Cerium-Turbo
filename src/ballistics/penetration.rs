@@ -50,6 +50,7 @@ mod tests {
             pen_drop_per_100m_mm: 4.0,
             normalization_deg: 5.0,
             ricochet_deg: 70.0,
+            arcade_damage: 180.0,
         }
     }
 

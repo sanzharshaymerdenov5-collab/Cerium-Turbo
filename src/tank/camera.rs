@@ -4,8 +4,9 @@ use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
-use super::spawn::{GunPivot, MuzzlePoint, PlayerTank, TankRoot};
-use crate::ballistics::{ArmorPlate, geometry::ray_plate};
+use super::armor::ArmorOwner;
+use super::spawn::{AimCommand, GunPivot, MuzzlePoint, PlayerTank, TankRoot};
+use crate::ballistics::{ArmorPlate, TargetInfo, geometry::ray_plate};
 use crate::core::GameState;
 use crate::voxel::VoxelWorld;
 
@@ -29,6 +30,14 @@ impl Default for TankCamera {
     }
 }
 
+/// Информация о бронеплите под прицелом (для индикатора пробития).
+#[derive(Debug, Clone, Copy)]
+pub struct AimPlateInfo {
+    pub thickness_mm: f32,
+    pub angle_deg: f32,
+    pub is_enemy_tank: bool,
+}
+
 /// Куда сейчас смотрит прицел камеры и куда в реальности смотрит ствол.
 #[derive(Resource, Debug)]
 pub struct AimTarget {
@@ -38,6 +47,8 @@ pub struct AimTarget {
     pub distance: f32,
     /// Имя мишени под прицелом (если есть).
     pub target_name: Option<String>,
+    /// Параметры плиты под прицелом (если есть).
+    pub target_plate: Option<AimPlateInfo>,
     /// Точка, куда сейчас смотрит линия ствола (для маркера сведения).
     pub gun_point: Vec3,
 }
@@ -48,6 +59,7 @@ impl Default for AimTarget {
             point: Vec3::new(0.0, 2.0, -100.0),
             distance: 100.0,
             target_name: None,
+            target_plate: None,
             gun_point: Vec3::new(0.0, 2.0, -100.0),
         }
     }
@@ -83,18 +95,18 @@ pub fn update_tank_camera(
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     mut cursors: Query<&mut CursorOptions, With<PrimaryWindow>>,
-    tanks: Query<&GlobalTransform, (With<TankRoot>, With<PlayerTank>)>,
-    guns: Query<&GlobalTransform, With<GunPivot>>,
-    muzzles: Query<&GlobalTransform, With<MuzzlePoint>>,
+    mut tanks: Query<(Entity, &GlobalTransform, &mut AimCommand), (With<TankRoot>, With<PlayerTank>)>,
+    guns: Query<(&GlobalTransform, &GunPivot)>,
+    muzzles: Query<(&GlobalTransform, &MuzzlePoint)>,
     world: Option<Res<VoxelWorld>>,
-    plates: Query<(&GlobalTransform, &ArmorPlate, &crate::ballistics::TargetInfo)>,
+    plates: Query<(&GlobalTransform, &ArmorPlate, &TargetInfo, Option<&ArmorOwner>)>,
     mut aim: ResMut<AimTarget>,
     mut cam_q: Query<(&mut Transform, &mut Projection, &mut TankCamera), With<Camera3d>>,
 ) {
     let Ok((mut cam_tf, mut proj, mut cam)) = cam_q.single_mut() else {
         return;
     };
-    let Ok(tank_gt) = tanks.single() else {
+    let Ok((player_ent, tank_gt, mut aim_cmd)) = tanks.single_mut() else {
         return;
     };
 
@@ -131,11 +143,10 @@ pub fn update_tank_camera(
     let forward = rot * Vec3::NEG_Z;
 
     if cam.sniper {
-        // Снайперский вид: у маски орудия.
         let anchor = guns
             .iter()
-            .next()
-            .map(|g| g.translation() + g.up() * 0.25 + g.forward() * 0.6)
+            .find(|(_, g)| g.tank == player_ent)
+            .map(|(g, _)| g.translation() + g.up() * 0.25 + g.forward() * 0.6)
             .unwrap_or_else(|| tank_gt.translation() + Vec3::new(0.0, 2.1, 0.0));
         cam_tf.translation = anchor;
         cam_tf.rotation = rot;
@@ -145,7 +156,6 @@ pub fn update_tank_camera(
     } else {
         let focus = tank_gt.translation() + Vec3::new(0.0, 2.2, 0.0);
         let desired = focus - forward * cam.distance;
-        // Не даём камере уходить под землю.
         let mut pos = desired;
         if let Some(w) = &world {
             if let Some(h) = w.grid.surface_height_at(pos.x, pos.z) {
@@ -159,23 +169,31 @@ pub fn update_tank_camera(
         }
     }
 
-    // Луч прицела из камеры.
-    let (pt, dist, name) = raycast_aim(
+    let (pt, dist, name, plate_info) = raycast_aim(
         cam_tf.translation,
         forward,
-        if cam.sniper { 0.5 } else { cam.distance + 2.0 },
+        if cam.sniper { 0.4 } else { (cam.distance - 2.0).max(0.5) },
+        Some(player_ent),
         world.as_deref(),
         &plates,
     );
     aim.point = pt;
     aim.distance = dist;
     aim.target_name = name;
+    aim.target_plate = plate_info;
+    aim_cmd.world_point = pt;
 
-    // Куда реально смотрит ствол.
-    if let Some(m_gt) = muzzles.iter().next() {
+    if let Some((m_gt, _)) = muzzles.iter().find(|(_, m)| m.tank == player_ent) {
         let m_pos = m_gt.translation();
         let m_dir = m_gt.forward().as_vec3();
-        let (gpt, _, _) = raycast_aim(m_pos, m_dir, 0.2, world.as_deref(), &plates);
+        let (gpt, _, _, _) = raycast_aim(
+            m_pos,
+            m_dir,
+            0.2,
+            Some(player_ent),
+            world.as_deref(),
+            &plates,
+        );
         aim.gun_point = gpt;
     } else {
         aim.gun_point = aim.point;
@@ -186,25 +204,35 @@ fn raycast_aim(
     origin: Vec3,
     dir: Vec3,
     skip: f32,
+    ignore_tank: Option<Entity>,
     world: Option<&VoxelWorld>,
-    plates: &Query<(&GlobalTransform, &ArmorPlate, &crate::ballistics::TargetInfo)>,
-) -> (Vec3, f32, Option<String>) {
+    plates: &Query<(&GlobalTransform, &ArmorPlate, &TargetInfo, Option<&ArmorOwner>)>,
+) -> (Vec3, f32, Option<String>, Option<AimPlateInfo>) {
     let max_d = 800.0;
     let start = origin + dir * skip;
     let mut best_t = max_d;
     let mut name = None;
+    let mut plate_info = None;
     if let Some(w) = world {
         if let Some(h) = w.grid.raycast(start, dir, max_d) {
             best_t = h.distance;
         }
     }
-    for (gt, plate, info) in plates {
+    for (gt, plate, info, owner) in plates {
+        if owner.is_some_and(|o| Some(o.tank) == ignore_tank) {
+            continue;
+        }
         let (_, rot, pos) = gt.to_scale_rotation_translation();
         if let Some(h) = ray_plate(start, dir, best_t, pos, rot, plate.half_extents) {
             best_t = h.t;
             name = Some(info.name.clone());
+            plate_info = Some(AimPlateInfo {
+                thickness_mm: plate.thickness_mm,
+                angle_deg: h.angle_deg,
+                is_enemy_tank: owner.is_some(),
+            });
         }
     }
     let total = skip + best_t;
-    (origin + dir * total, total, name)
+    (origin + dir * total, total, name, plate_info)
 }

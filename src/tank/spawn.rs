@@ -3,10 +3,17 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use super::builder::build_tank_parts;
+use super::armor::{TankCombat, spawn_tank_armor_plates};
+use super::builder::{build_tank_parts_for_team, TankVoxelParts};
 use super::spec::{TankSpec, VoxelVisualSource};
-use crate::core::GameState;
+use crate::core::{GameState, Team};
 use crate::voxel::{VoxelAssets, voxel_model_bundle, vox_loader::load_vox};
+
+/// Целевая мировая точка наведения орудия (для игрока и ИИ).
+#[derive(Component, Debug, Clone, Copy)]
+pub struct AimCommand {
+    pub world_point: Vec3,
+}
 
 /// Корень физического танка.
 #[derive(Component, Debug, Clone)]
@@ -30,6 +37,8 @@ pub struct TankState {
     pub speed_kmh: f32,
     /// Сколько катков сейчас опираются на грунт.
     pub grounded_wheels: u8,
+    /// Коэффициент сцепления с грунтом под гусеницами (1.0 = земля, 0.25 = лёд).
+    pub surface_traction: f32,
     pub throttle: f32,
     pub steer: f32,
     pub fire_queued: bool,
@@ -133,7 +142,7 @@ pub fn hull_collider(spec: &TankSpec) -> Collider {
     Collider::convex_hull(&pts).unwrap_or_else(|| Collider::cuboid(hw * 2.0, top - belly, hl * 2.0))
 }
 
-/// Спавнит боевой танк с физикой Avian3D и иерархией воксельных мешей.
+/// Спавнит боевой танк с физикой Avian3D, бронеплитами и иерархией воксельных мешей.
 pub fn spawn_tank(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -143,39 +152,52 @@ pub fn spawn_tank(
     yaw: f32,
     is_player: bool,
 ) -> Entity {
-    let parts = build_visual_parts(&spec);
+    let team = if is_player { Team::Player } else { Team::Enemy };
+    let parts = build_visual_parts(&spec, team);
     let susp = Suspension::for_spec(&spec);
     let col = hull_collider(&spec);
     let turret_offset = Vec3::from_array(spec.profile.turret_pivot);
     let gun_offset = Vec3::from_array(spec.profile.gun_pivot);
     let muzzle_offset = Vec3::new(0.0, 0.0, -(spec.profile.barrel_length + 0.15));
+    let initial_aim = pos + Quat::from_rotation_y(yaw) * Vec3::new(0.0, 1.8, -100.0);
 
     let root = commands
         .spawn((
-            Name::new(format!("Tank {}", spec.name)),
+            Name::new(format!("Tank {} ({:?})", spec.name, team)),
             Transform::from_translation(pos).with_rotation(Quat::from_rotation_y(yaw)),
             Visibility::default(),
             RigidBody::Dynamic,
             col,
-            Friction::new(0.05),
+            Friction::new(0.02),
             Restitution::new(0.0),
             Mass(spec.mass_kg),
             CenterOfMass(Vec3::new(0.0, 0.55, 0.0)),
-            LinearDamping(0.35),
-            AngularDamping(2.8),
+            LinearDamping(0.06),
+            AngularDamping(0.95),
             TransformInterpolation,
-            TankState::default(),
+            TankState {
+                surface_traction: 1.0,
+                ..default()
+            },
             susp,
             DespawnOnExit(GameState::InBattle),
         ))
         .id();
 
-    commands.entity(root).insert(TankRoot {
-        entity: root,
-        spec,
-        spawn_pos: pos,
-        spawn_yaw: yaw,
-    });
+    let combat = TankCombat::new(team, spec.name.clone());
+    commands.entity(root).insert((
+        TankRoot {
+            entity: root,
+            spec: spec.clone(),
+            spawn_pos: pos,
+            spawn_yaw: yaw,
+        },
+        team,
+        combat,
+        AimCommand {
+            world_point: initial_aim,
+        },
+    ));
     if is_player {
         commands.entity(root).insert(PlayerTank);
     }
@@ -228,6 +250,9 @@ pub fn spawn_tank(
     commands
         .entity(root)
         .add_children(&[hull_vis, turret_pivot]);
+
+    spawn_tank_armor_plates(commands, root, turret_pivot, &spec);
+
     root
 }
 
@@ -238,7 +263,7 @@ pub fn spawn_preview_tank(
     assets: &VoxelAssets,
     spec: &TankSpec,
 ) -> Entity {
-    let parts = build_visual_parts(spec);
+    let parts = build_visual_parts(spec, Team::Player);
     let turret_offset = Vec3::from_array(spec.profile.turret_pivot);
     let gun_offset = Vec3::from_array(spec.profile.gun_pivot);
 
@@ -275,8 +300,8 @@ pub fn spawn_preview_tank(
         .id()
 }
 
-fn build_visual_parts(spec: &TankSpec) -> super::builder::TankVoxelParts {
-    let mut parts = build_tank_parts(&spec.profile);
+fn build_visual_parts(spec: &TankSpec, team: Team) -> TankVoxelParts {
+    let mut parts = build_tank_parts_for_team(&spec.profile, team);
     if let VoxelVisualSource::VoxFile(ref bytes_hint) = spec.visual {
         // Если передан встроенный .vox, подменяем корпус; при ошибке остаётся процедурный.
         if let Ok(grid) = load_vox(bytes_hint.as_bytes(), spec.profile.voxel_size) {

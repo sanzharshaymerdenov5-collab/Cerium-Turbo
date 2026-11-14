@@ -118,7 +118,7 @@ pub fn setup_hangar(
             .with_children(|p| {
                 p.spawn((
                     Text::new(
-                        "CERIUM-TURBO  •  ЭТАП 1: ПРОТОТИП (1 танк, 1 карта, только сплошной AP)",
+                        "CERIUM-TURBO  •  ЭТАП 2: БОЙ С ИИ-ВРАГАМИ (только сплошной AP)",
                     ),
                     TextFont::from_font_size(20.0),
                     TextColor(Color::srgb(0.92, 0.95, 0.88)),

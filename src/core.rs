@@ -1,4 +1,4 @@
-//! Базовые типы ядра: состояния игры, идентификаторы, режим правил урона.
+//! Базовые типы ядра: состояния игры, команды, исход боя, режим правил урона.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -6,18 +6,33 @@ use serde::{Deserialize, Serialize};
 /// Глобальные состояния игры.
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum GameState {
-    /// Ангар: выбор танка и старт боя.
+    /// Ангар: выбор танка, карты, режима и старт боя.
     #[default]
     Hangar,
     /// Бой на карте.
     InBattle,
 }
 
-/// Режим правил урона. Этап 1–2 используют `PrototypeTargets`;
-/// остальные режимы появятся на Этапах 3 и 6 (переключатель).
+/// Сторона конфликта.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Team {
+    Player,
+    Enemy,
+}
+
+/// Текущий исход боя.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BattleStatus {
+    #[default]
+    Ongoing,
+    Victory,
+    Defeat,
+}
+
+/// Режим правил урона.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Resource)]
 pub enum DamageRulesMode {
-    /// Этапы 1–2: пробития/рикошеты фиксируются на мишенях.
+    /// Этапы 1–2: пробития/рикошеты фиксируются по счётчику попаданий.
     #[default]
     PrototypeTargets,
     /// Этапы 3–5: общее ХП + ХП модулей (стиль WoT).
@@ -44,6 +59,7 @@ impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<GameState>()
             .init_resource::<DamageRulesMode>()
+            .init_resource::<BattleStatus>()
             .insert_resource(SelectedTank(TankId("t34_85".into())))
             .insert_resource(SelectedMap("proving_grounds".into()));
     }

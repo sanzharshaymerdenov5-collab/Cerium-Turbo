@@ -3,6 +3,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use super::armor::TankCombat;
 use super::spawn::{
     GunPivot, MuzzlePoint, PlayerTank, Suspension, TankRoot, TankState,
 };
@@ -29,9 +30,18 @@ pub fn compute_spring_force(
 pub fn read_player_input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
-    mut q: Query<&mut TankState, With<PlayerTank>>,
+    mut q: Query<(&mut TankState, &TankCombat), With<PlayerTank>>,
 ) {
-    let Ok(mut st) = q.single_mut() else { return };
+    let Ok((mut st, combat)) = q.single_mut() else {
+        return;
+    };
+    if !combat.alive {
+        st.throttle = 0.0;
+        st.steer = 0.0;
+        st.fire_queued = false;
+        st.reset_queued = false;
+        return;
+    }
     let mut throttle = 0.0;
     if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) {
         throttle += 1.0;
@@ -60,7 +70,14 @@ pub fn read_player_input(
 pub fn tank_suspension_and_drive(
     time: Res<Time>,
     world: Option<Res<VoxelWorld>>,
-    mut q: Query<(&mut Transform, &TankRoot, &Suspension, &mut TankState, Forces)>,
+    mut q: Query<(
+        &mut Transform,
+        &TankRoot,
+        &Suspension,
+        &mut TankState,
+        Option<&TankCombat>,
+        Forces,
+    )>,
 ) {
     let Some(world) = world else { return };
     let dt = time.delta_secs();
@@ -68,8 +85,12 @@ pub fn tank_suspension_and_drive(
         return;
     }
 
-    for (mut tf, root, susp, mut st, mut forces) in &mut q {
-        if st.reset_queued {
+    for (mut tf, root, susp, mut st, combat, mut forces) in &mut q {
+        let alive = combat.is_none_or(|c| c.alive);
+        let immobilized = combat.is_some_and(|c| c.immobilized);
+        let speed_mult = combat.map_or(1.0, |c| c.speed_mult);
+
+        if st.reset_queued && alive {
             st.reset_queued = false;
             let ground_y = world
                 .grid
@@ -82,6 +103,7 @@ pub fn tank_suspension_and_drive(
             *forces.angular_velocity_mut() = Vec3::ZERO;
             continue;
         }
+        st.reset_queued = false;
 
         let rot = tf.rotation;
         let pos = tf.translation;
@@ -99,25 +121,13 @@ pub fn tank_suspension_and_drive(
             forces.apply_torque(corr);
         }
 
-        let max_fwd = root.spec.max_speed_kmh / 3.6;
-        let max_rev = root.spec.reverse_speed_kmh / 3.6;
-        let target_fwd = if st.throttle >= 0.0 {
-            st.throttle * max_fwd
-        } else {
-            st.throttle * max_rev
-        };
-        let track_span = (root.spec.profile.hull_width - root.spec.profile.track_width).max(1.5);
-        let target_yaw = st.steer * root.spec.max_yaw_rate_dps.to_radians();
-        // При движении назад инвертируем руление для естественного заднего хода.
-        let steer_dir = if st.throttle < -0.1 { -1.0 } else { 1.0 };
-        let diff_v = target_yaw * steer_dir * (track_span * 0.5);
-
-        let max_drive_per_wheel = (root.spec.max_tractive_force_kn * 1000.0) / 8.0;
         let mut grounded = 0u8;
+        let mut grounded_points = [Vec3::ZERO; 16];
+        let mut norm_sum = 0.0f32;
+        let mut traction_sum = 0.0f32;
 
         for w in &susp.wheels {
             let wp = pos + rot * w.local_pos;
-            // Луч вниз в мировом кадре (надёжно на крутых склонах).
             let Some(hit) = world.grid.raycast(wp, Vec3::NEG_Y, susp.max_drop) else {
                 continue;
             };
@@ -125,7 +135,6 @@ pub fn tank_suspension_and_drive(
             if dist > susp.rest_length {
                 continue;
             }
-            grounded += 1;
             let compression = susp.rest_length - dist;
             let r = wp - pos;
             let vel_at_wheel = lin_vel + ang_vel.cross(r);
@@ -138,23 +147,86 @@ pub fn tank_suspension_and_drive(
             );
             forces.apply_force_at_point(Vec3::Y * f_norm, wp);
 
-            // Продольная скорость конкретной гусеницы (левая: v − diff, правая: v + diff).
-            let desired_track_v = target_fwd + w.side * diff_v;
-            let cur_fwd_v = vel_at_wheel.dot(forward);
-            let cur_lat_v = vel_at_wheel.dot(right);
-
-            let v_err = desired_track_v - cur_fwd_v;
-            let f_long = (v_err * root.spec.mass_kg * 1.1)
-                .clamp(-max_drive_per_wheel, max_drive_per_wheel);
-            // Боковое трение гусениц препятствует заносу.
-            let f_lat = (-cur_lat_v * root.spec.mass_kg * 2.2)
-                .clamp(-f_norm * 1.15, f_norm * 1.15);
-
-            let horiz = forward * f_long + right * f_lat;
-            forces.apply_force_at_point(horiz, wp);
+            if (grounded as usize) < grounded_points.len() {
+                grounded_points[grounded as usize] = wp;
+            }
+            grounded += 1;
+            norm_sum += f_norm;
+            traction_sum += if hit.material == Material::Ice { 0.25 } else { 1.0 };
         }
 
         st.grounded_wheels = grounded;
+        if grounded == 0 {
+            st.surface_traction = 0.0;
+            continue;
+        }
+
+        let traction = (traction_sum / grounded as f32).clamp(0.15, 1.0);
+        st.surface_traction = traction;
+        let g_ratio = (grounded as f32 / susp.wheels.len().max(1) as f32).clamp(0.0, 1.0);
+
+        let eff_throttle = if alive && !immobilized {
+            st.throttle.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        let eff_steer = if alive && !immobilized {
+            st.steer.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+
+        let max_fwd = (root.spec.max_speed_kmh / 3.6) * speed_mult;
+        let max_rev = (root.spec.reverse_speed_kmh / 3.6) * speed_mult;
+        let raw_target_fwd = if eff_throttle >= 0.0 {
+            eff_throttle * max_fwd
+        } else {
+            eff_throttle * max_rev
+        };
+        // При одновременном газе и повороте немного сбрасываем целевую скорость на внутреннюю гусеницу.
+        let target_fwd = raw_target_fwd * (1.0 - 0.14 * eff_steer.abs());
+
+        let com_fwd_v = lin_vel.dot(forward);
+        let com_lat_v = lin_vel.dot(right);
+        let max_total_drive =
+            root.spec.max_tractive_force_kn * 1000.0 * traction * g_ratio * speed_mult.max(0.2);
+
+        let v_err = target_fwd - com_fwd_v;
+        let long_gain = if eff_throttle.abs() > 0.01 { 2.8 } else { 1.2 };
+        let f_long_total =
+            (v_err * root.spec.mass_kg * long_gain * traction).clamp(-max_total_drive, max_total_drive);
+
+        // Гасим боковой снос в центре масс (НЕ используем `vel_at_wheel`, чтобы не тормозить поворот вокруг Y!).
+        let max_lat_total = norm_sum.max(root.spec.mass_kg * 5.0) * 1.15 * traction;
+        let f_lat_total =
+            (-com_lat_v * root.spec.mass_kg * 2.8 * traction).clamp(-max_lat_total, max_lat_total);
+
+        let inv_g = 1.0 / (grounded.min(grounded_points.len() as u8) as f32);
+        let wheel_horiz = (forward * f_long_total + right * f_lat_total) * inv_g;
+        for &wp in grounded_points.iter().take(grounded as usize) {
+            forces.apply_force_at_point(wheel_horiz, wp);
+        }
+
+        // Явный сервомомент гусеничного разворота вокруг локальной оси +Y корпуса.
+        let track_span = (root.spec.profile.hull_width - root.spec.profile.track_width).max(1.5);
+        let steer_dir = if eff_throttle < -0.1 { -1.0 } else { 1.0 };
+        let target_yaw = eff_steer
+            * steer_dir
+            * root.spec.max_yaw_rate_dps.to_radians()
+            * speed_mult.max(0.5);
+        let cur_yaw = ang_vel.dot(up);
+        let yaw_inertia = root.spec.mass_kg
+            * (root.spec.profile.hull_width.powi(2) + root.spec.profile.hull_length.powi(2))
+            / 12.0;
+        let yaw_gain = if eff_steer.abs() > 0.01 { 8.0 } else { 5.5 };
+        let max_yaw_torque = (root.spec.max_tractive_force_kn * 1000.0)
+            * (track_span * 0.5)
+            * 1.45
+            * traction
+            * g_ratio;
+        let yaw_torque =
+            ((target_yaw - cur_yaw) * yaw_inertia * yaw_gain).clamp(-max_yaw_torque, max_yaw_torque);
+        forces.apply_torque(up * yaw_torque);
     }
 }
 
@@ -165,7 +237,7 @@ pub fn tank_fire_system(
     time: Res<Time>,
     assets: Option<Res<VoxelAssets>>,
     mut log: ResMut<HitLog>,
-    mut tanks: Query<(&TankRoot, &mut TankState, Forces)>,
+    mut tanks: Query<(&TankRoot, &mut TankState, Option<&TankCombat>, Forces)>,
     guns: Query<(&GlobalTransform, &GunPivot)>,
     muzzles: Query<(&GlobalTransform, &MuzzlePoint)>,
     mut seed: Local<u64>,
@@ -173,17 +245,24 @@ pub fn tank_fire_system(
     let Some(assets) = assets else { return };
     let dt = time.delta_secs();
 
-    for (root, mut st, mut forces) in &mut tanks {
-        st.reload_timer = (st.reload_timer - dt).max(0.0);
+    for (root, mut st, combat, mut forces) in &mut tanks {
+        let alive = combat.is_none_or(|c| c.alive);
+        let jammed = combat.is_some_and(|c| c.gun_jammed);
+        let reload_mult = combat.map_or(1.0, |c| c.reload_mult.max(0.5));
+        let team = combat.map(|c| c.team);
+
+        st.reload_timer = (st.reload_timer - dt / reload_mult).max(0.0);
         if !st.fire_queued {
             continue;
         }
         st.fire_queued = false;
-        if st.reload_timer > 0.0 {
+        if !alive || jammed || st.reload_timer > 0.0 {
             continue;
         }
-        st.reload_timer = root.spec.reload_s;
-        log.shots += 1;
+        st.reload_timer = root.spec.reload_s * reload_mult;
+        if team != Some(crate::core::Team::Enemy) {
+            log.shots += 1;
+        }
 
         let Some((m_gt, _)) = muzzles.iter().find(|(_, m)| m.tank == root.entity) else {
             continue;
@@ -191,7 +270,15 @@ pub fn tank_fire_system(
         let origin = m_gt.translation();
         let dir = m_gt.forward().as_vec3();
 
-        spawn_projectile(&mut commands, &assets, origin, dir, root.spec.shell);
+        spawn_projectile(
+            &mut commands,
+            &assets,
+            origin,
+            dir,
+            root.spec.shell,
+            Some(root.entity),
+            team,
+        );
 
         // Дульная вспышка / дым.
         *seed = seed.wrapping_add(0x517C_C1B7_2722_0A95);
@@ -220,7 +307,14 @@ pub fn tank_fire_system(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+    use crate::tank::spawn::spawn_tank;
+    use crate::tank::spec::load_tank_spec;
+    use crate::voxel::VoxelGrid;
+    use bevy::state::app::StatesPlugin;
+    use bevy::time::TimeUpdateStrategy;
 
     #[test]
     fn spring_force_is_finite_non_negative_and_monotonic() {
@@ -235,8 +329,98 @@ mod tests {
         let f2 = compute_spring_force(0.15, 0.0, 200_000.0, 30_000.0, 500_000.0);
         assert!(f2 > f1 && f1 > 0.0);
 
-        // Быстрое разжатие не превращает пружину в «присоску».
         let rebound = compute_spring_force(0.05, 20.0, 200_000.0, 30_000.0, 500_000.0);
         assert_eq!(rebound, 0.0);
+    }
+
+    fn run_drive_sim(throttle: f32, steer: f32, steps: usize) -> (Vec3, f32) {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            TransformPlugin,
+            StatesPlugin,
+            PhysicsPlugins::default(),
+        ))
+        .init_state::<crate::core::GameState>()
+        .init_asset::<Mesh>()
+        .init_asset::<StandardMaterial>()
+        .init_resource::<VoxelAssets>()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )))
+        .add_systems(FixedUpdate, tank_suspension_and_drive);
+
+        // Ровная воксельная площадка 64x8x64 с шагом 1.0 м, пол до y=2 (верх y=2.0 м).
+        let mut grid = VoxelGrid::new(UVec3::new(64, 8, 64), 1.0, Vec3::new(-32.0, 0.0, -32.0));
+        grid.fill_box(IVec3::new(0, 0, 0), IVec3::new(63, 1, 63), Material::Grass);
+        let world = VoxelWorld::new(grid);
+        app.insert_resource(world);
+        app.world_mut()
+            .resource_mut::<NextState<crate::core::GameState>>()
+            .set(crate::core::GameState::InBattle);
+
+        app.add_systems(
+            Startup,
+            |mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, assets: Res<VoxelAssets>| {
+                let spec = load_tank_spec("t34_85").unwrap();
+                spawn_tank(
+                    &mut commands,
+                    &mut meshes,
+                    &assets,
+                    spec,
+                    Vec3::new(0.0, 2.2, 0.0),
+                    0.0,
+                    true,
+                );
+            },
+        );
+        app.finish();
+        app.cleanup();
+
+        for _ in 0..steps {
+            {
+                let mut q = app.world_mut().query::<&mut TankState>();
+                for mut st in q.iter_mut(app.world_mut()) {
+                    st.throttle = throttle;
+                    st.steer = steer;
+                }
+            }
+            app.update();
+        }
+
+        let mut q = app.world_mut().query::<(&Transform, &TankRoot)>();
+        let (tf, _) = q.single(app.world()).unwrap();
+        let (yaw, _, _) = tf.rotation.to_euler(EulerRot::YXZ);
+        (tf.translation, yaw)
+    }
+
+    #[test]
+    fn tank_turns_while_driving_forward_w_plus_a_and_w_plus_d() {
+        // W+A: движение вперёд (-Z) и поворот влево (+yaw).
+        let (pos_wa, yaw_wa) = run_drive_sim(1.0, 1.0, 90);
+        assert!(pos_wa.z < -3.0, "W+A должен ехать вперёд, pos={pos_wa:?}");
+        assert!(
+            yaw_wa.to_degrees() > 20.0,
+            "W+A должен поворачивать влево (>20°), yaw={}°",
+            yaw_wa.to_degrees()
+        );
+
+        // W+D: движение вперёд (-Z) и поворот вправо (-yaw).
+        let (pos_wd, yaw_wd) = run_drive_sim(1.0, -1.0, 90);
+        assert!(pos_wd.z < -3.0, "W+D должен ехать вперёд, pos={pos_wd:?}");
+        assert!(
+            yaw_wd.to_degrees() < -20.0,
+            "W+D должен поворачивать вправо (<-20°), yaw={}°",
+            yaw_wd.to_degrees()
+        );
+
+        // Чистый разворот на месте (A).
+        let (_, yaw_a) = run_drive_sim(0.0, 1.0, 60);
+        assert!(
+            yaw_a.to_degrees() > 15.0,
+            "A должен поворачивать на месте (>15°), yaw={}°",
+            yaw_a.to_degrees()
+        );
     }
 }

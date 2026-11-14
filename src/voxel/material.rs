@@ -42,10 +42,14 @@ pub enum Material {
     TankSteel = 23,
     TankStar = 24,
     TankWheel = 25,
+    // --- Окраска вражеских танков ---
+    EnemyArmor = 26,
+    EnemyDark = 27,
+    EnemyMark = 28,
 }
 
 /// Список всех непустых материалов (для создания ассетов и тестов).
-pub const ALL_MATERIALS: [Material; 18] = [
+pub const ALL_MATERIALS: [Material; 21] = [
     Material::Soil,
     Material::Grass,
     Material::Rock,
@@ -64,6 +68,9 @@ pub const ALL_MATERIALS: [Material; 18] = [
     Material::TankSteel,
     Material::TankStar,
     Material::TankWheel,
+    Material::EnemyArmor,
+    Material::EnemyDark,
+    Material::EnemyMark,
 ];
 
 impl Material {
@@ -120,6 +127,9 @@ impl Material {
             Material::TankSteel => [0.30, 0.31, 0.32],
             Material::TankStar => [0.75, 0.10, 0.08],
             Material::TankWheel => [0.17, 0.19, 0.12],
+            Material::EnemyArmor => [0.44, 0.39, 0.31],
+            Material::EnemyDark => [0.26, 0.23, 0.20],
+            Material::EnemyMark => [0.90, 0.42, 0.12],
         }
     }
 

@@ -1,5 +1,6 @@
 //! Модуль танка: описания, воксельный билдер, спавн, подвеска, башня, камера.
 
+pub mod armor;
 pub mod builder;
 pub mod camera;
 pub mod controller;
@@ -10,14 +11,15 @@ pub mod turret;
 use bevy::prelude::*;
 
 use crate::core::GameState;
-pub use camera::{AimTarget, TankCamera, spawn_battle_camera};
+pub use armor::{ArmorOwner, TankCombat};
+pub use camera::{AimPlateInfo, AimTarget, TankCamera, spawn_battle_camera};
 pub use spawn::{
-    GunPivot, MuzzlePoint, PlayerTank, Suspension, TankRoot, TankState, TurretPivot,
+    AimCommand, GunPivot, MuzzlePoint, PlayerTank, Suspension, TankRoot, TankState, TurretPivot,
     spawn_preview_tank, spawn_tank,
 };
 pub use spec::{
-    ProceduralTankProfile, T34_85_RON, TankSpec, VoxelVisualSource, available_tanks,
-    load_tank_spec,
+    ArmorScheme, ArmorZone, HullShape, ProceduralTankProfile, T34_85_RON, TankSpec, TurretShape,
+    VoxelVisualSource, available_tanks, load_tank_spec,
 };
 
 pub struct TankPlugin;

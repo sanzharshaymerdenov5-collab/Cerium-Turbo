@@ -5,8 +5,10 @@
 //! ([`ballistics::ShellType::SolidAP`]). Остальные типы снарядов добавляются
 //! только после завершения Этапа 6.
 
+pub mod ai;
 pub mod ballistics;
 pub mod core;
+pub mod damage;
 pub mod maps;
 pub mod tank;
 pub mod ui;
@@ -23,6 +25,8 @@ pub fn configure_game_plugins(app: &mut App) {
         maps::MapPlugin,
         tank::TankPlugin,
         ballistics::BallisticsPlugin,
+        damage::DamagePlugin,
+        ai::AiPlugin,
         ui::UiPlugin,
     ));
 }
@@ -34,7 +38,7 @@ pub fn build_app() -> App {
         DefaultPlugins
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "Cerium-Turbo — Этап 1: прототип".into(),
+                    title: "Cerium-Turbo".into(),
                     canvas: Some("#bevy".into()),
                     fit_canvas_to_parent: true,
                     prevent_default_event_handling: true,
