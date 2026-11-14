@@ -9,7 +9,7 @@ use bevy::prelude::*;
 
 use crate::ballistics::penetration::penetration_at;
 use crate::core::{DamageRulesMode, GameState, SelectedMap, SelectedTank, TankId};
-use crate::damage::{ModuleKind, TankModules};
+use crate::damage::{ModuleKind, TankCrew, TankModules};
 use crate::maps::{MapSpec, available_maps, load_map_spec};
 use crate::tank::armor::{hull_plate_specs, turret_plate_specs};
 use crate::tank::{
@@ -25,6 +25,8 @@ pub struct HangarViewState {
     pub distance: f32,
     pub auto_spin: bool,
     pub xray_armor: bool,
+    pub prev_xray_btn: bool,
+    pub prev_mode_btn: bool,
 }
 
 impl Default for HangarViewState {
@@ -35,6 +37,8 @@ impl Default for HangarViewState {
             distance: 9.2,
             auto_spin: true,
             xray_armor: false,
+            prev_xray_btn: false,
+            prev_mode_btn: false,
         }
     }
 }
@@ -52,6 +56,7 @@ pub struct HangarCamera;
 pub enum HangarButton {
     SelectTank(usize),
     SelectMap(usize),
+    ToggleMode,
     ToggleXray,
     StartBattle,
 }
@@ -60,6 +65,7 @@ pub enum HangarButton {
 pub enum HangarLabel {
     Info,
     ToggleXray,
+    ToggleMode,
 }
 
 fn format_hangar_info(
@@ -257,6 +263,30 @@ fn spawn_xray_overlay(
         );
     }
 
+    // Экипаж внутри боевого отделения (золотисто-лаймовые 3D-фигуры для режима War Thunder).
+    let crew = TankCrew::for_spec(spec);
+    let crew_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.96, 0.88, 0.24),
+        unlit: true,
+        ..default()
+    });
+    for member in &crew.members {
+        let base_tf = if member.in_turret {
+            turret_tf * Transform::from_translation(member.local_center)
+        } else {
+            Transform::from_translation(member.local_center)
+        };
+        children.push(
+            commands
+                .spawn((
+                    Mesh3d(unit_cube.clone()),
+                    MeshMaterial3d(crew_mat.clone()),
+                    base_tf.with_scale(member.half_extents * 1.7),
+                ))
+                .id(),
+        );
+    }
+
     commands
         .spawn((
             Name::new("HangarXrayRoot"),
@@ -372,6 +402,7 @@ pub fn setup_hangar(
                         align_items: AlignItems::Center,
                         padding: UiRect::axes(Val::Px(16.0), Val::Px(10.0)),
                         border: UiRect::all(Val::Px(1.0)),
+                        column_gap: Val::Px(10.0),
                         ..default()
                     },
                     BackgroundColor(Color::srgba(0.06, 0.08, 0.10, 0.88)),
@@ -380,30 +411,59 @@ pub fn setup_hangar(
                 .with_children(|p| {
                     p.spawn((
                         Text::new(
-                            "CERIUM-TURBO  •  ЭТАП 5: 5 КАРТ И 5 ТАНКОВ (только сплошной SolidAP)",
+                            "CERIUM-TURBO  •  ЭТАП 6: 5 ТАНКОВ, 5 КАРТ, WoT / WAR THUNDER (только SolidAP)",
                         ),
-                        TextFont::from_font_size(18.0),
+                        TextFont::from_font_size(17.5),
                         TextColor(Color::srgb(0.92, 0.95, 0.88)),
                     ));
 
-                    p.spawn((
-                        Interaction::default(),
-                        HangarButton::ToggleXray,
-                        Node {
-                            padding: UiRect::axes(Val::Px(14.0), Val::Px(6.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgb(0.14, 0.20, 0.28)),
-                        BorderColor::all(Color::srgb(0.45, 0.65, 0.85)),
-                    ))
-                    .with_children(|btn| {
-                        btn.spawn((
-                            HangarLabel::ToggleXray,
-                            Text::new("Броня и модули [V]"),
-                            TextFont::from_font_size(14.0),
-                            TextColor(Color::srgb(0.86, 0.94, 1.0)),
-                        ));
+                    p.spawn(Node {
+                        column_gap: Val::Px(8.0),
+                        align_items: AlignItems::Center,
+                        ..default()
+                    })
+                    .with_children(|btns_r| {
+                        btns_r
+                            .spawn((
+                                Interaction::default(),
+                                HangarButton::ToggleMode,
+                                Node {
+                                    padding: UiRect::axes(Val::Px(14.0), Val::Px(6.0)),
+                                    border: UiRect::all(Val::Px(1.5)),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgb(0.22, 0.34, 0.18)),
+                                BorderColor::all(Color::srgb(0.55, 0.82, 0.42)),
+                            ))
+                            .with_children(|btn| {
+                                btn.spawn((
+                                    HangarLabel::ToggleMode,
+                                    Text::new(format!("Режим [M]: {}", mode.ru_label())),
+                                    TextFont::from_font_size(13.5),
+                                    TextColor(Color::WHITE),
+                                ));
+                            });
+
+                        btns_r
+                            .spawn((
+                                Interaction::default(),
+                                HangarButton::ToggleXray,
+                                Node {
+                                    padding: UiRect::axes(Val::Px(14.0), Val::Px(6.0)),
+                                    border: UiRect::all(Val::Px(1.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgb(0.14, 0.20, 0.28)),
+                                BorderColor::all(Color::srgb(0.45, 0.65, 0.85)),
+                            ))
+                            .with_children(|btn| {
+                                btn.spawn((
+                                    HangarLabel::ToggleXray,
+                                    Text::new("Броня/экипаж [V]"),
+                                    TextFont::from_font_size(13.5),
+                                    TextColor(Color::srgb(0.86, 0.94, 1.0)),
+                                ));
+                            });
                     });
                 });
 
@@ -532,9 +592,9 @@ pub fn setup_hangar(
                 .with_children(|h| {
                     h.spawn((
                         Text::new(
-                            "ПКМ/ЛКМ: камера  |  Колёсико: зум  |  1-5 / ←→: танк  |  Q / E: карта  |  V: рентген",
+                            "ПКМ/ЛКМ: камера  |  Колёсико: зум  |  1-5 / ←→: танк  |  Q / E: карта  |  M: режим (WoT/WT)  |  V: рентген",
                         ),
-                        TextFont::from_font_size(13.0),
+                        TextFont::from_font_size(12.5),
                         TextColor(Color::srgb(0.75, 0.80, 0.86)),
                     ));
                 });
@@ -584,7 +644,7 @@ pub fn update_hangar(
     mut next_state: ResMut<NextState<GameState>>,
     mut selected_tank: ResMut<SelectedTank>,
     mut selected_map: ResMut<SelectedMap>,
-    mode: Res<DamageRulesMode>,
+    mut mode: ResMut<DamageRulesMode>,
     mut view: ResMut<HangarViewState>,
     mut assets_pair: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>, Res<VoxelAssets>),
     mut scene_q: ParamSet<(
@@ -637,6 +697,9 @@ pub fn update_hangar(
 
     let mut ui_hovered = false;
     let mut toggle_xray = keys.just_pressed(KeyCode::KeyV);
+    let mut toggle_mode = keys.just_pressed(KeyCode::KeyM);
+    let mut xray_pressed_now = false;
+    let mut mode_pressed_now = false;
     let mut start = keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space);
 
     for (btn, interaction, _, _) in &btns {
@@ -647,22 +710,39 @@ pub fn update_hangar(
             match *btn {
                 HangarButton::SelectTank(i) if i < tanks.len() => new_idx = Some(i),
                 HangarButton::SelectMap(i) if i < maps.len() => new_map_idx = Some(i),
-                HangarButton::ToggleXray => toggle_xray = true,
+                HangarButton::ToggleMode => mode_pressed_now = true,
+                HangarButton::ToggleXray => xray_pressed_now = true,
                 HangarButton::StartBattle => start = true,
                 _ => {}
             }
         }
     }
-
-    if let Some(i) = new_idx {
-        if tanks[i].id != selected_tank.0.0 {
-            selected_tank.0 = TankId(tanks[i].id.clone());
-        }
+    if xray_pressed_now && !view.prev_xray_btn {
+        toggle_xray = true;
     }
-    if let Some(i) = new_map_idx {
-        if maps[i].id != selected_map.0 {
-            selected_map.0 = maps[i].id.clone();
-        }
+    if mode_pressed_now && !view.prev_mode_btn {
+        toggle_mode = true;
+    }
+    view.prev_xray_btn = xray_pressed_now;
+    view.prev_mode_btn = mode_pressed_now;
+
+    if let Some(i) = new_idx
+        && tanks[i].id != selected_tank.0.0
+    {
+        selected_tank.0 = TankId(tanks[i].id.clone());
+    }
+    if let Some(i) = new_map_idx
+        && maps[i].id != selected_map.0
+    {
+        selected_map.0 = maps[i].id.clone();
+    }
+    if toggle_mode {
+        *mode = match *mode {
+            DamageRulesMode::ArcadeHpAndModules => DamageRulesMode::ModulesOnlyWt,
+            DamageRulesMode::ModulesOnlyWt | DamageRulesMode::PrototypeTargets => {
+                DamageRulesMode::ArcadeHpAndModules
+            }
+        };
     }
     if toggle_xray {
         view.xray_armor = !view.xray_armor;
@@ -707,6 +787,7 @@ pub fn update_hangar(
         .expect("default map");
 
     // Подсветка кнопок.
+    let wt_mode = *mode == DamageRulesMode::ModulesOnlyWt;
     for (btn, interaction, mut bg, mut border) in &mut btns {
         match *btn {
             HangarButton::SelectTank(i) => {
@@ -739,6 +820,24 @@ pub fn update_hangar(
                     Color::srgb(0.26, 0.32, 0.38)
                 });
             }
+            HangarButton::ToggleMode => {
+                *bg = if *interaction == Interaction::Hovered {
+                    if wt_mode {
+                        BackgroundColor(Color::srgb(0.56, 0.32, 0.12))
+                    } else {
+                        BackgroundColor(Color::srgb(0.26, 0.42, 0.22))
+                    }
+                } else if wt_mode {
+                    BackgroundColor(Color::srgb(0.44, 0.24, 0.08))
+                } else {
+                    BackgroundColor(Color::srgb(0.20, 0.34, 0.18))
+                };
+                *border = BorderColor::all(if wt_mode {
+                    Color::srgb(0.95, 0.62, 0.22)
+                } else {
+                    Color::srgb(0.55, 0.82, 0.42)
+                });
+            }
             HangarButton::ToggleXray => {
                 *bg = if *interaction == Interaction::Hovered {
                     BackgroundColor(Color::srgb(0.20, 0.30, 0.42))
@@ -763,11 +862,14 @@ pub fn update_hangar(
             HangarLabel::Info => {
                 txt.0 = format_hangar_info(&spec, &map_spec, *mode, view.xray_armor);
             }
+            HangarLabel::ToggleMode => {
+                txt.0 = format!("Режим [M]: {}", mode.ru_label());
+            }
             HangarLabel::ToggleXray => {
                 txt.0 = if view.xray_armor {
-                    "Броня и модули [V]: ВКЛ".to_string()
+                    "Броня/экипаж [V]: ВКЛ".to_string()
                 } else {
-                    "Броня и модули [V]".to_string()
+                    "Броня/экипаж [V]".to_string()
                 };
             }
         }

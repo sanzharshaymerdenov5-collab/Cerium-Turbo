@@ -33,6 +33,7 @@ pub fn aim_turret_and_gun(
             continue;
         }
         let traverse_mult = combat.map_or(1.0, |c| c.traverse_mult);
+        let elevation_mult = combat.map_or(1.0, |c| c.elevation_mult);
         let spec = &root.spec;
         let inv_root = root_gt.affine().inverse();
 
@@ -70,7 +71,7 @@ pub fn aim_turret_and_gun(
                     spec.gun_elevation_deg.to_radians(),
                 );
                 let (_, cur_pitch, _) = g_tf.rotation.to_euler(EulerRot::YXZ);
-                let pitch_speed = (spec.turret_traverse_dps * 0.9 * traverse_mult.max(0.25))
+                let pitch_speed = (spec.turret_traverse_dps * 0.9 * elevation_mult)
                     .to_radians()
                     * dt;
                 let new_pitch = step_angle(cur_pitch, desired_pitch, pitch_speed).clamp(

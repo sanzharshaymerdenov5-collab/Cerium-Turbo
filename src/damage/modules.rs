@@ -218,6 +218,7 @@ impl TankModules {
             combat.gun_jammed = true;
             combat.speed_mult = 0.0;
             combat.traverse_mult = 0.0;
+            combat.elevation_mult = 0.0;
             return;
         }
         let lt = self.state(ModuleKind::LeftTrack);
@@ -244,6 +245,7 @@ impl TankModules {
             ModuleState::Damaged => 0.5,
             ModuleState::Intact => 1.0,
         };
+        combat.elevation_mult = 1.0;
 
         combat.gun_jammed = gun == ModuleState::Destroyed;
 

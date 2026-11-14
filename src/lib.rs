@@ -132,5 +132,73 @@ mod tests {
             app.update();
         }
         assert!(!app.world().contains_resource::<voxel::VoxelWorld>());
+
+        // Переключение режима на War Thunder (ModulesOnlyWt) клавишей M в ангаре.
+        assert_eq!(
+            *app.world().resource::<core::DamageRulesMode>(),
+            core::DamageRulesMode::ArcadeHpAndModules
+        );
+        app.world_mut().write_message(bevy::input::keyboard::KeyboardInput {
+            key_code: KeyCode::KeyM,
+            logical_key: bevy::input::keyboard::Key::Character("m".into()),
+            state: bevy::input::ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        app.update();
+        app.world_mut().write_message(bevy::input::keyboard::KeyboardInput {
+            key_code: KeyCode::KeyM,
+            logical_key: bevy::input::keyboard::Key::Character("m".into()),
+            state: bevy::input::ButtonState::Released,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        app.update();
+        assert_eq!(
+            *app.world().resource::<core::DamageRulesMode>(),
+            core::DamageRulesMode::ModulesOnlyWt
+        );
+
+        // Вход в бой в режиме WT + проверка наличия экипажа у всех танков и работы XRay Hit-Cam.
+        app.world_mut()
+            .resource_mut::<NextState<core::GameState>>()
+            .set(core::GameState::InBattle);
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_eq!(
+            *app.world().resource::<State<core::GameState>>().get(),
+            core::GameState::InBattle
+        );
+        assert!(app.world().contains_resource::<damage::XRayHitReport>());
+        {
+            let mut q = app.world_mut().query::<&damage::TankCrew>();
+            let crew_count = q.iter(app.world()).count();
+            assert!(crew_count >= 2, "у игрока и ИИ должен быть TankCrew: {crew_count}");
+        }
+        app.world_mut().write_message(bevy::input::keyboard::KeyboardInput {
+            key_code: KeyCode::Tab,
+            logical_key: bevy::input::keyboard::Key::Tab,
+            state: bevy::input::ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        app.update();
+        app.world_mut().write_message(bevy::input::keyboard::KeyboardInput {
+            key_code: KeyCode::Tab,
+            logical_key: bevy::input::keyboard::Key::Tab,
+            state: bevy::input::ButtonState::Released,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<core::GameState>>().get(),
+            core::GameState::Hangar
+        );
     }
 }

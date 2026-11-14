@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use crate::ai::{AiBrain, VoxelNavGrid};
 use crate::ballistics::{ArmorPlate, HitLog, TargetInfo};
 use crate::core::{BattleStatus, GameState, SelectedMap, SelectedTank};
-use crate::damage::DamageFeed;
+use crate::damage::{DamageFeed, XRayHitReport};
 use crate::tank::{load_tank_spec, spawn_battle_camera, spawn_tank};
 use crate::voxel::{
     ChunkEntities, Material, VoxelAssets, VoxelGrid, VoxelWorld, spawn_world_chunks,
@@ -66,10 +66,12 @@ fn setup_battle_scene(
     mut chunks: ResMut<ChunkEntities>,
     mut log: ResMut<HitLog>,
     mut feed: ResMut<DamageFeed>,
+    mut xray: ResMut<XRayHitReport>,
     mut status: ResMut<BattleStatus>,
 ) {
     *log = HitLog::default();
     *feed = DamageFeed::default();
+    *xray = XRayHitReport::default();
     *status = BattleStatus::Ongoing;
 
     let map_spec = load_map_spec(&selected_map.0)

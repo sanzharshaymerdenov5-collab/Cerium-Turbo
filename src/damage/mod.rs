@@ -4,8 +4,11 @@
 //! - Этап 3+: `ArcadeHpAndModules` (общее ХП + ХП модулей, стиль WoT).
 //! - Этап 6: `ModulesOnlyWt` (только модули и экипаж без общего ХП, стиль War Thunder).
 
+pub mod crew;
 pub mod hp_model;
 pub mod modules;
+pub mod spall;
+pub mod wt_model;
 
 use bevy::prelude::*;
 
@@ -14,26 +17,33 @@ use crate::core::{BattleStatus, DamageRulesMode, GameState, Team};
 use crate::tank::TankCombat;
 use crate::voxel::{Material, Rng, VoxelAssets, spawn_debris_burst};
 
+pub use crew::{CrewMember, CrewRole, CrewState, TankCrew};
 pub use hp_model::{
     DamageFeed, PenIndicator, TankHealth, classify_penetration, destroy_tank,
 };
 pub use modules::{ModuleKind, ModuleState, TankModules};
+pub use spall::{compute_residual_penetration, generate_spall_rays, spall_cone_params};
+pub use wt_model::XRayHitReport;
 
 pub struct DamagePlugin;
 
 impl Plugin for DamagePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<DamageFeed>().add_systems(
-            Update,
-            (
-                handle_prototype_impacts,
-                hp_model::handle_arcade_hp_impacts,
-                hp_model::tick_modules_repair_and_fire,
-                update_battle_status,
-            )
-                .chain()
-                .run_if(in_state(GameState::InBattle)),
-        );
+        app.init_resource::<DamageFeed>()
+            .init_resource::<XRayHitReport>()
+            .add_systems(
+                Update,
+                (
+                    handle_prototype_impacts,
+                    hp_model::handle_arcade_hp_impacts,
+                    wt_model::handle_wt_modules_impacts,
+                    hp_model::tick_modules_repair_and_fire,
+                    wt_model::tick_wt_crew_and_fire,
+                    update_battle_status,
+                )
+                    .chain()
+                    .run_if(in_state(GameState::InBattle)),
+            );
     }
 }
 

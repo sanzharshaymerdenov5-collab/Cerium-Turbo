@@ -24,9 +24,10 @@ pub struct TankCombat {
     /// Счётчик пробитий в режиме `PrototypeTargets` (Этап 2).
     pub prototype_hits: u8,
     pub prototype_max_hits: u8,
-    /// Множители ходовой, скорости наведения, перезарядки и флаги клина.
+    /// Множители ходовой, скорости башни/орудия, перезарядки и флаги клина.
     pub speed_mult: f32,
     pub traverse_mult: f32,
+    pub elevation_mult: f32,
     pub reload_mult: f32,
     pub gun_jammed: bool,
     pub immobilized: bool,
@@ -46,6 +47,7 @@ impl TankCombat {
             prototype_max_hits,
             speed_mult: 1.0,
             traverse_mult: 1.0,
+            elevation_mult: 1.0,
             reload_mult: 1.0,
             gun_jammed: false,
             immobilized: false,

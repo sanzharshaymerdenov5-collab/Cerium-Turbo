@@ -7,8 +7,8 @@ use crate::ballistics::HitLog;
 use crate::ballistics::penetration::{effective_armor_mm, penetration_at};
 use crate::core::{BattleStatus, DamageRulesMode, GameState, Team};
 use crate::damage::{
-    DamageFeed, ModuleKind, ModuleState, PenIndicator, TankHealth, TankModules,
-    classify_penetration,
+    CrewRole, CrewState, DamageFeed, ModuleKind, ModuleState, PenIndicator, TankCrew, TankHealth,
+    TankModules, classify_penetration,
 };
 use crate::tank::{AimTarget, PlayerTank, TankCamera, TankCombat, TankRoot, TankState};
 
@@ -24,6 +24,13 @@ const ALL_MODULES: [ModuleKind; 7] = [
     ModuleKind::FuelTank,
 ];
 
+const ALL_CREW: [CrewRole; 4] = [
+    CrewRole::Driver,
+    CrewRole::Gunner,
+    CrewRole::Commander,
+    CrewRole::Loader,
+];
+
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub enum HudText {
     Telemetry,
@@ -32,18 +39,23 @@ pub enum HudText {
     DamageFeed,
     HitLog,
     HpHeader,
+    WtCrewHeader,
     Consumables,
     BattleBanner,
     EnemyMarker(usize),
     ModuleBadge(ModuleKind),
+    CrewBadge(CrewRole),
 }
 
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub enum HudPanel {
     HullHp,
+    WtStatus,
     HpBarFill,
     FireAlert,
+    WtFireAlert,
     ModuleBox(ModuleKind),
+    CrewBox(CrewRole),
     BattleBanner,
     EnemyMarker(usize),
     SniperOverlay,
@@ -102,9 +114,9 @@ pub fn setup_hud(mut commands: Commands) {
                     p.spawn((
                         Text::new(
                             "WASD: ход/поворот  |  Мышь: башня/прицел  |  ЛКМ/Пробел: огонь\n\
-                             Shift: снайперский  |  5: Ремкомпл.  |  6: Огнетуш.  |  R: на гусеницы  |  Tab: ангар",
+                             Shift: снайперский  |  5: Ремкомпл.  |  6: Огнетуш.  |  R: на гусеницы  |  Tab: ангар (режим [M])",
                         ),
-                        TextFont::from_font_size(13.0),
+                        TextFont::from_font_size(12.5),
                         TextColor(Color::srgb(0.78, 0.83, 0.88)),
                     ));
                 });
@@ -139,7 +151,7 @@ pub fn setup_hud(mut commands: Commands) {
                 ));
             });
 
-            // Нижняя строка: слева панель ХП/модулей (WoT), справа журнал попаданий.
+            // Нижняя строка: слева панель ХП/модулей (WoT) или панель экипажа/модулей (WT), справа журнал попаданий.
             root.spawn(Node {
                 width: Val::Percent(100.0),
                 justify_content: JustifyContent::SpaceBetween,
@@ -148,7 +160,7 @@ pub fn setup_hud(mut commands: Commands) {
                 ..default()
             })
             .with_children(|bottom| {
-                // Панель ХП и кукла модулей (Этап 3).
+                // 1. Панель ХП и кукла модулей (режим WoT — Этап 3).
                 bottom
                     .spawn((
                         HudPanel::HullHp,
@@ -200,6 +212,7 @@ pub fn setup_hud(mut commands: Commands) {
                         hp.spawn((
                             HudPanel::FireAlert,
                             Node {
+                                display: Display::None,
                                 padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
                                 border: UiRect::all(Val::Px(1.0)),
                                 ..default()
@@ -249,6 +262,124 @@ pub fn setup_hud(mut commands: Commands) {
                         });
 
                         hp.spawn((
+                            HudText::Consumables,
+                            Text::new("[5] Ремкомплект (2)  |  [6] Огнетушитель (2)"),
+                            TextFont::from_font_size(12.0),
+                            TextColor(Color::srgb(0.76, 0.82, 0.88)),
+                        ));
+                    });
+
+                // 2. Панель экипажа и модулей без общего ХП (режим War Thunder — Этап 6).
+                bottom
+                    .spawn((
+                        HudPanel::WtStatus,
+                        Node {
+                            display: Display::None,
+                            width: Val::Px(390.0),
+                            padding: UiRect::all(Val::Px(10.0)),
+                            border: UiRect::all(Val::Px(1.5)),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(6.0),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(0.05, 0.07, 0.09, 0.86)),
+                        BorderColor::all(Color::srgb(0.86, 0.54, 0.18)),
+                        Visibility::Hidden,
+                    ))
+                    .with_children(|wt| {
+                        wt.spawn((
+                            HudText::WtCrewHeader,
+                            Text::new("ЭКИПАЖ: 4 / 4  •  WAR THUNDER (БЕЗ ХП)"),
+                            TextFont::from_font_size(14.5),
+                            TextColor(Color::srgb(1.0, 0.86, 0.44)),
+                        ));
+
+                        wt.spawn((
+                            HudPanel::WtFireAlert,
+                            Node {
+                                display: Display::None,
+                                padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.55, 0.12, 0.06, 0.94)),
+                            BorderColor::all(Color::srgb(1.0, 0.45, 0.20)),
+                            Visibility::Hidden,
+                        ))
+                        .with_children(|f| {
+                            f.spawn((
+                                Text::new("ПОЖАР! Выводит экипаж — [6] Огнетуш."),
+                                TextFont::from_font_size(12.5),
+                                TextColor(Color::srgb(1.0, 0.92, 0.80)),
+                            ));
+                        });
+
+                        // Сетка состояния экипажа (< 2 живых = уничтожен).
+                        wt.spawn(Node {
+                            width: Val::Percent(100.0),
+                            flex_wrap: FlexWrap::Wrap,
+                            column_gap: Val::Px(5.0),
+                            row_gap: Val::Px(5.0),
+                            ..default()
+                        })
+                        .with_children(|crew_row| {
+                            for role in ALL_CREW {
+                                crew_row
+                                    .spawn((
+                                        HudPanel::CrewBox(role),
+                                        Node {
+                                            padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                                            border: UiRect::all(Val::Px(1.0)),
+                                            ..default()
+                                        },
+                                        BackgroundColor(Color::srgba(0.08, 0.18, 0.12, 0.90)),
+                                        BorderColor::all(Color::srgb(0.32, 0.72, 0.36)),
+                                        Visibility::Inherited,
+                                    ))
+                                    .with_children(|b| {
+                                        b.spawn((
+                                            HudText::CrewBadge(role),
+                                            Text::new(role.ru_short()),
+                                            TextFont::from_font_size(12.0),
+                                            TextColor(Color::srgb(0.84, 0.98, 0.86)),
+                                        ));
+                                    });
+                            }
+                        });
+
+                        // Сетка внутренних и ходовых модулей.
+                        wt.spawn(Node {
+                            width: Val::Percent(100.0),
+                            flex_wrap: FlexWrap::Wrap,
+                            column_gap: Val::Px(5.0),
+                            row_gap: Val::Px(5.0),
+                            ..default()
+                        })
+                        .with_children(|grid| {
+                            for kind in ALL_MODULES {
+                                grid.spawn((
+                                    HudPanel::ModuleBox(kind),
+                                    Node {
+                                        padding: UiRect::axes(Val::Px(7.0), Val::Px(3.0)),
+                                        border: UiRect::all(Val::Px(1.0)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgba(0.08, 0.16, 0.10, 0.85)),
+                                    BorderColor::all(Color::srgb(0.26, 0.56, 0.30)),
+                                    Visibility::Inherited,
+                                ))
+                                .with_children(|b| {
+                                    b.spawn((
+                                        HudText::ModuleBadge(kind),
+                                        Text::new(kind.ru_short()),
+                                        TextFont::from_font_size(12.0),
+                                        TextColor(Color::srgb(0.80, 0.96, 0.82)),
+                                    ));
+                                });
+                            }
+                        });
+
+                        wt.spawn((
                             HudText::Consumables,
                             Text::new("[5] Ремкомплект (2)  |  [6] Огнетушитель (2)"),
                             TextFont::from_font_size(12.0),
@@ -371,6 +502,7 @@ pub fn update_hud(
             &TankCombat,
             Option<&TankHealth>,
             Option<&TankModules>,
+            Option<&TankCrew>,
         ),
         With<PlayerTank>,
     >,
@@ -407,9 +539,9 @@ pub fn update_hud(
     }
 
     let player = player_q.single().ok();
-    let player_pos = player.map(|(gt, _, _, _, _, _)| gt.translation());
+    let player_pos = player.map(|(gt, _, _, _, _, _, _)| gt.translation());
     let pen_ind = match (player, aim.target_plate) {
-        (Some((_, root, _, _, _, _)), Some(plate)) => classify_penetration(
+        (Some((_, root, _, _, _, _, _)), Some(plate)) => classify_penetration(
             &root.spec.shell,
             aim.distance,
             plate.thickness_mm,
@@ -419,11 +551,17 @@ pub fn update_hud(
     };
 
     // Подготовка текстов.
-    let telemetry_str = if let Some((_, root, st, combat, health_opt, mods_opt)) = player {
+    let telemetry_str = if let Some((_, root, st, combat, health_opt, mods_opt, crew_opt)) = player {
         let gun_status = if !combat.alive {
             "ТАНК УНИЧТОЖЕН".to_string()
         } else if combat.gun_jammed {
-            "КАЗЁННИК ВЫБИТ!".to_string()
+            if crew_opt.is_some_and(|cr| cr.state(CrewRole::Gunner) != CrewState::Alive)
+                && *mode == DamageRulesMode::ModulesOnlyWt
+            {
+                "НАВОДЧИК ВЫБИТ!".to_string()
+            } else {
+                "КАЗЁННИК ВЫБИТ!".to_string()
+            }
         } else if st.reload_timer <= 0.01 {
             "ГОТОВО К ВЫСТРЕЛУ".to_string()
         } else {
@@ -435,7 +573,9 @@ pub fn update_hud(
                 format!("Прочность: {:.0}/{:.0} HP", h.hp, h.max_hp)
             }
             (DamageRulesMode::ModulesOnlyWt, _) => {
-                "Режим War Thunder: без общего ХП".to_string()
+                let alive_c = crew_opt.map_or(4, |c| c.alive_count());
+                let total_c = crew_opt.map_or(4, |c| c.total_count());
+                format!("Режим WT (без общего ХП)  •  Экипаж: {alive_c}/{total_c}")
             }
             _ => {
                 let left = combat.prototype_max_hits.saturating_sub(combat.prototype_hits);
@@ -480,7 +620,7 @@ pub fn update_hud(
         let err = aim.point.distance(aim.gun_point);
         let spread = if err < 0.8 { "СВЕДЁН" } else { "НАВОДКА..." };
         match (&aim.target_name, aim.target_plate, player) {
-            (Some(name), Some(plate), Some((_, root, _, _, _, _))) => {
+            (Some(name), Some(plate), Some((_, root, _, _, _, _, _))) => {
                 let eff = effective_armor_mm(&root.spec.shell, plate.thickness_mm, plate.angle_deg);
                 let pen = penetration_at(&root.spec.shell, aim.distance);
                 format!(
@@ -518,8 +658,9 @@ pub fn update_hud(
         s.trim_end().to_string()
     };
 
-    let hp_opt = player.and_then(|(_, _, _, _, h, _)| h);
-    let mods_opt = player.and_then(|(_, _, _, _, _, m)| m);
+    let hp_opt = player.and_then(|(_, _, _, _, h, _, _)| h);
+    let mods_opt = player.and_then(|(_, _, _, _, _, m, _)| m);
+    let crew_opt = player.and_then(|(_, _, _, _, _, _, c)| c);
 
     // Обновление текстовых элементов.
     for (tag, mut txt, color_opt) in &mut texts {
@@ -550,6 +691,21 @@ pub fn update_hud(
             HudText::HpHeader => {
                 if let Some(h) = hp_opt {
                     txt.0 = format!("ПРОЧНОСТЬ: {:.0} / {:.0} HP", h.hp, h.max_hp);
+                }
+            }
+            HudText::WtCrewHeader => {
+                if let Some(crew) = crew_opt {
+                    let alive_c = crew.alive_count();
+                    let total_c = crew.total_count();
+                    txt.0 = if let Some(rep_role) = crew.replacing {
+                        format!(
+                            "ЭКИПАЖ: {alive_c}/{total_c}  •  ПЕРЕСАДКА {} ({:.1}с)",
+                            rep_role.ru_short(),
+                            crew.replacement_timer.max(0.0)
+                        )
+                    } else {
+                        format!("ЭКИПАЖ: {alive_c} / {total_c}  •  WAR THUNDER (БЕЗ ХП)")
+                    };
                 }
             }
             HudText::Consumables => {
@@ -595,6 +751,30 @@ pub fn update_hud(
                     }
                 }
             }
+            HudText::CrewBadge(role) => {
+                if let Some(crew) = crew_opt
+                    && let Some(member) = crew.member(role)
+                {
+                    txt.0 = match member.state {
+                        CrewState::Alive if member.is_backup => {
+                            format!("{}*", role.ru_short())
+                        }
+                        CrewState::Alive => role.ru_short().to_string(),
+                        CrewState::Moved => format!("{} ->", role.ru_short()),
+                        CrewState::Unconscious => format!("{} X", role.ru_short()),
+                    };
+                    if let Some(mut c) = color_opt {
+                        c.0 = match member.state {
+                            CrewState::Alive if member.is_backup => {
+                                Color::srgb(0.65, 0.98, 0.86)
+                            }
+                            CrewState::Alive => Color::srgb(0.84, 0.98, 0.86),
+                            CrewState::Moved => Color::srgb(1.0, 0.86, 0.42),
+                            CrewState::Unconscious => Color::srgb(1.0, 0.52, 0.50),
+                        };
+                    }
+                }
+            }
             HudText::EnemyMarker(idx) => {
                 if let Some(&(epos, ec, eh)) = alive_enemies.get(idx) {
                     let dist = player_pos.map_or(0.0, |p| p.distance(epos));
@@ -617,6 +797,9 @@ pub fn update_hud(
 
     // Обновление панелей и маркеров.
     let show_hp_panel = *mode == DamageRulesMode::ArcadeHpAndModules;
+    let show_wt_panel = *mode == DamageRulesMode::ModulesOnlyWt;
+    let on_fire = mods_opt.is_some_and(|m| m.fire_timer > 0.0);
+
     for (panel, mut node, mut vis, bg_opt, border_opt) in &mut panels {
         match *panel {
             HudPanel::SniperOverlay => {
@@ -627,7 +810,24 @@ pub fn update_hud(
                 };
             }
             HudPanel::HullHp => {
+                node.display = if show_hp_panel {
+                    Display::Flex
+                } else {
+                    Display::None
+                };
                 *vis = if show_hp_panel {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                };
+            }
+            HudPanel::WtStatus => {
+                node.display = if show_wt_panel {
+                    Display::Flex
+                } else {
+                    Display::None
+                };
+                *vis = if show_wt_panel {
                     Visibility::Visible
                 } else {
                     Visibility::Hidden
@@ -649,8 +849,18 @@ pub fn update_hud(
                 }
             }
             HudPanel::FireAlert => {
-                let on_fire = mods_opt.is_some_and(|m| m.fire_timer > 0.0);
-                *vis = if show_hp_panel && on_fire {
+                let show = show_hp_panel && on_fire;
+                node.display = if show { Display::Flex } else { Display::None };
+                *vis = if show {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                };
+            }
+            HudPanel::WtFireAlert => {
+                let show = show_wt_panel && on_fire;
+                node.display = if show { Display::Flex } else { Display::None };
+                *vis = if show {
                     Visibility::Visible
                 } else {
                     Visibility::Hidden
@@ -671,6 +881,34 @@ pub fn update_hud(
                             ModuleState::Intact => BorderColor::all(Color::srgb(0.26, 0.56, 0.30)),
                             ModuleState::Damaged => BorderColor::all(Color::srgb(0.95, 0.72, 0.16)),
                             ModuleState::Destroyed => BorderColor::all(Color::srgb(0.95, 0.25, 0.22)),
+                        };
+                    }
+                }
+            }
+            HudPanel::CrewBox(role) => {
+                if let Some(crew) = crew_opt
+                    && let Some(member) = crew.member(role)
+                {
+                    if let Some(mut bg) = bg_opt {
+                        bg.0 = match member.state {
+                            CrewState::Alive if member.is_backup => {
+                                Color::srgba(0.06, 0.20, 0.18, 0.90)
+                            }
+                            CrewState::Alive => Color::srgba(0.08, 0.18, 0.12, 0.90),
+                            CrewState::Moved => Color::srgba(0.24, 0.18, 0.04, 0.90),
+                            CrewState::Unconscious => Color::srgba(0.30, 0.06, 0.06, 0.92),
+                        };
+                    }
+                    if let Some(mut border) = border_opt {
+                        *border = match member.state {
+                            CrewState::Alive if member.is_backup => {
+                                BorderColor::all(Color::srgb(0.30, 0.86, 0.68))
+                            }
+                            CrewState::Alive => BorderColor::all(Color::srgb(0.32, 0.72, 0.36)),
+                            CrewState::Moved => BorderColor::all(Color::srgb(0.95, 0.72, 0.16)),
+                            CrewState::Unconscious => {
+                                BorderColor::all(Color::srgb(0.96, 0.26, 0.22))
+                            }
                         };
                     }
                 }
