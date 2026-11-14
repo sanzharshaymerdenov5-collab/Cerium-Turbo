@@ -261,6 +261,10 @@ pub fn spawn_tank(
     root
 }
 
+/// Маркер 3D-макета танка в ангаре (для переспавна при смене танка).
+#[derive(Component, Debug, Default)]
+pub struct HangarPreviewTank;
+
 /// Спавнит визуальный макет танка без физики (для ангара).
 pub fn spawn_preview_tank(
     commands: &mut Commands,
@@ -271,6 +275,7 @@ pub fn spawn_preview_tank(
     let parts = build_visual_parts(spec, Team::Player);
     let turret_offset = Vec3::from_array(spec.profile.turret_pivot);
     let gun_offset = Vec3::from_array(spec.profile.gun_pivot);
+    let turret_yaw = if spec.yaw_limits_deg.is_some() { 0.0 } else { 0.25 };
 
     let hull_vis = commands
         .spawn(voxel_model_bundle(&parts.hull, meshes, assets))
@@ -288,7 +293,7 @@ pub fn spawn_preview_tank(
     let turret = commands
         .spawn((
             Transform::from_translation(turret_offset)
-                .with_rotation(Quat::from_rotation_y(0.25)),
+                .with_rotation(Quat::from_rotation_y(turret_yaw)),
             Visibility::default(),
         ))
         .add_children(&[turret_vis, gun])
@@ -297,6 +302,7 @@ pub fn spawn_preview_tank(
     commands
         .spawn((
             Name::new("HangarPreviewTank"),
+            HangarPreviewTank,
             Transform::IDENTITY,
             Visibility::default(),
             DespawnOnExit(GameState::Hangar),

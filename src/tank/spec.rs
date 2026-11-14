@@ -166,16 +166,50 @@ impl TankSpec {
 
 /// Встроенные в бинарник описания танков (wasm-совместимо, без async-загрузки).
 pub const T34_85_RON: &str = include_str!("../../assets/tanks/t34_85.ron");
+pub const M24_CHAFFEE_RON: &str = include_str!("../../assets/tanks/m24_chaffee.ron");
+pub const TIGER_1_RON: &str = include_str!("../../assets/tanks/tiger_1.ron");
+pub const SU_100_RON: &str = include_str!("../../assets/tanks/su_100.ron");
+pub const IS_3_RON: &str = include_str!("../../assets/tanks/is_3.ron");
 
 /// Находит описание по идентификатору.
 pub fn load_tank_spec(id: &str) -> Option<TankSpec> {
     match id {
         "t34_85" => TankSpec::from_ron(T34_85_RON).ok(),
+        "m24_chaffee" => TankSpec::from_ron(M24_CHAFFEE_RON).ok(),
+        "tiger_1" => TankSpec::from_ron(TIGER_1_RON).ok(),
+        "su_100" => TankSpec::from_ron(SU_100_RON).ok(),
+        "is_3" => TankSpec::from_ron(IS_3_RON).ok(),
         _ => None,
     }
 }
 
 /// Список доступных танков (для ангара).
 pub fn available_tanks() -> Vec<TankSpec> {
-    ["t34_85"].iter().filter_map(|id| load_tank_spec(id)).collect()
+    ["t34_85", "m24_chaffee", "tiger_1", "su_100", "is_3"]
+        .iter()
+        .filter_map(|id| load_tank_spec(id))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ballistics::ShellType;
+
+    #[test]
+    fn all_five_historical_tanks_parse_and_follow_ap_only() {
+        let tanks = available_tanks();
+        assert_eq!(tanks.len(), 5);
+        for t in &tanks {
+            assert_eq!(t.shell.shell_type, ShellType::SolidAP);
+            assert!(t.max_hp >= 500.0);
+        }
+        let su = load_tank_spec("su_100").unwrap();
+        assert_eq!(su.yaw_limits_deg, Some((-12.0, 12.0)));
+        assert_eq!(su.profile.hull_shape, HullShape::Casemate);
+
+        let is3 = load_tank_spec("is_3").unwrap();
+        assert_eq!(is3.profile.hull_shape, HullShape::PikeNose);
+        assert!(is3.armor.turret_front_mm >= 220.0);
+    }
 }

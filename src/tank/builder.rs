@@ -126,7 +126,7 @@ pub fn build_tank_parts_for_team(p: &ProceduralTankProfile, team: Team) -> TankV
             }
             let slope_narrow = match p.hull_shape {
                 HullShape::SlopedT34 | HullShape::Casemate => ((pt.y - 0.7).max(0.0)) * 0.32,
-                HullShape::PikeNose => ((pt.y - 0.75).max(0.0)) * 0.25,
+                HullShape::PikeNose => ((pt.y - 0.72).max(0.0)) * 0.30,
                 HullShape::LightBox | HullShape::HeavyBox => 0.0,
             };
             if ax > inner_w - slope_narrow {
@@ -142,11 +142,11 @@ pub fn build_tank_parts_for_team(p: &ProceduralTankProfile, team: Team) -> TankV
                     }
                 }
                 HullShape::PikeNose => {
-                    let v = ax * 0.45;
-                    if pt.y >= 0.7 {
-                        -hl + v + (pt.y - 0.7) * 1.05
+                    let v = ax * 0.56;
+                    if pt.y >= 0.72 {
+                        -hl + v + (pt.y - 0.72) * 1.05
                     } else {
-                        -hl + v + (0.7 - pt.y) * 0.65
+                        -hl + v + (0.72 - pt.y) * 0.70
                     }
                 }
                 HullShape::Casemate => {
@@ -175,6 +175,15 @@ pub fn build_tank_parts_for_team(p: &ProceduralTankProfile, team: Team) -> TankV
             if pt.z < front_z || pt.z > rear_z {
                 return None;
             }
+            // Внешние кормовые топливные бочки у ИС-3 и Т-34-85 на бортах.
+            if matches!(p.hull_shape, HullShape::PikeNose)
+                && ax > inner_w * 0.78
+                && pt.z > hl * 0.25
+                && pt.z < hl * 0.78
+                && pt.y > p.deck_height - 0.28
+            {
+                return Some(pal.dark);
+            }
             // Решётка МТО сверху сзади.
             if pt.y > p.deck_height - p.voxel_size * 1.2 && pt.z > 0.6 && ax < inner_w * 0.65 {
                 return Some(pal.dark);
@@ -188,32 +197,77 @@ pub fn build_tank_parts_for_team(p: &ProceduralTankProfile, team: Team) -> TankV
     let rz = p.turret_radius_z;
     let th = p.turret_height;
     let turret = build_from_fn(
-        Vec3::new(-rx - 0.1, 0.0, -rz - 0.2),
-        Vec3::new(rx + 0.1, th + 0.3, rz + 0.25),
+        Vec3::new(-rx - 0.15, 0.0, -rz - 0.2),
+        Vec3::new(rx + 0.15, th + 0.3, rz + 0.45),
         p.voxel_size,
         |pt| {
-            // Командирская башенка.
+            // Командирская башенка (для ПТ-САУ минимальный перископный лючок).
             let cup = Vec3::new(-rx * 0.35, th, rz * 0.25);
-            if pt.y >= th && pt.y <= th + 0.22 {
+            let cup_h = if p.turret_shape == TurretShape::FixedCasemate {
+                0.10
+            } else if p.turret_shape == TurretShape::BoxHeavy {
+                0.26
+            } else {
+                0.20
+            };
+            if pt.y >= th && pt.y <= th + cup_h {
                 let d = ((pt.x - cup.x).powi(2) + (pt.z - cup.z).powi(2)).sqrt();
-                if d <= 0.28 {
+                let r_cup = if p.turret_shape == TurretShape::BoxHeavy {
+                    0.32
+                } else {
+                    0.26
+                };
+                if d <= r_cup {
                     return Some(pal.dark);
                 }
+            }
+            // Кормовой ящик (Rommelkiste) на Tiger I.
+            if p.turret_shape == TurretShape::BoxHeavy
+                && pt.y >= 0.12
+                && pt.y <= th * 0.78
+                && pt.x.abs() <= rx * 0.65
+                && pt.z > rz * 0.90
+                && pt.z <= rz + 0.32
+            {
+                return Some(pal.dark);
             }
             if pt.y < 0.0 || pt.y > th {
                 return None;
             }
             let inside = match p.turret_shape {
                 TurretShape::BoxHeavy => {
-                    let k = 1.0 - (pt.y / th) * 0.08;
-                    pt.x.abs() <= rx * k && (pt.z - 0.05).abs() <= rz * k
+                    let k = 1.0 - (pt.y / th) * 0.06;
+                    if pt.z < 0.0 {
+                        let nx = pt.x / (rx * k);
+                        let nz = pt.z / (rz * k);
+                        nx * nx + nz * nz <= 1.0
+                    } else {
+                        pt.x.abs() <= rx * k && pt.z <= rz * k
+                    }
                 }
                 TurretShape::FixedCasemate => {
-                    let k = 1.0 - (pt.y / th) * 0.22;
-                    let front_slope = -rz + (pt.y / th) * 0.65;
+                    let k = 1.0 - (pt.y / th) * 0.24;
+                    let front_slope = -rz + (pt.y / th) * 0.72;
                     pt.x.abs() <= rx * k && pt.z >= front_slope && pt.z <= rz
                 }
-                TurretShape::HexCast | TurretShape::CompactLight | TurretShape::RoundedDome => {
+                TurretShape::RoundedDome => {
+                    let t = (pt.y / th).clamp(0.0, 1.0);
+                    let k = (1.0 - t.powf(1.8) * 0.44).max(0.45);
+                    let nx = pt.x / (rx * k);
+                    let nz = (pt.z - 0.06) / (rz * k);
+                    nx * nx + nz * nz <= 1.0
+                }
+                TurretShape::CompactLight => {
+                    let k = 1.0 - (pt.y / th) * 0.16;
+                    let bustle = pt.z > rz * 0.35
+                        && pt.z <= rz + 0.18
+                        && pt.x.abs() <= rx * 0.68
+                        && pt.y >= th * 0.20;
+                    let nx = pt.x / (rx * k);
+                    let nz = (pt.z - 0.02) / (rz * k);
+                    bustle || (nx * nx + nz * nz <= 1.0)
+                }
+                TurretShape::HexCast => {
                     let k = 1.0 - (pt.y / th) * 0.20;
                     let nx = pt.x / (rx * k);
                     let nz = (pt.z - 0.05) / (rz * k);
@@ -234,15 +288,32 @@ pub fn build_tank_parts_for_team(p: &ProceduralTankProfile, team: Team) -> TankV
         },
     );
 
-    // 3. Орудие + маска (вдоль −Z от цапф).
+    // 3. Орудие + маска + дульный тормоз (у Tiger I и ИС-3).
     let br = p.barrel_radius;
     let bl = p.barrel_length;
+    let has_muzzle_brake = matches!(
+        p.turret_shape,
+        TurretShape::BoxHeavy | TurretShape::RoundedDome
+    );
+    let mantlet_w = if p.turret_shape == TurretShape::FixedCasemate {
+        0.42
+    } else {
+        0.30
+    };
     let barrel = build_from_fn(
-        Vec3::new(-0.35, -0.25, -bl),
-        Vec3::new(0.35, 0.25, 0.2),
+        Vec3::new(-0.46, -0.28, -bl - 0.1),
+        Vec3::new(0.46, 0.28, 0.25),
         p.gun_voxel_size,
         |pt| {
-            if pt.z >= -0.35 && pt.z <= 0.15 && pt.x.abs() <= 0.30 && pt.y.abs() <= 0.20 {
+            if pt.z >= -0.38 && pt.z <= 0.18 && pt.x.abs() <= mantlet_w && pt.y.abs() <= 0.22 {
+                return Some(pal.dark);
+            }
+            if has_muzzle_brake
+                && pt.z <= -bl + 0.28
+                && pt.z >= -bl
+                && pt.x.abs() <= br * 1.85
+                && pt.y.abs() <= br * 1.35
+            {
                 return Some(pal.dark);
             }
             if pt.z <= 0.0 && pt.z >= -bl {
@@ -265,7 +336,7 @@ pub fn build_tank_parts_for_team(p: &ProceduralTankProfile, team: Team) -> TankV
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tank::spec::{T34_85_RON, TankSpec};
+    use crate::tank::spec::{T34_85_RON, TankSpec, available_tanks};
     use crate::voxel::mesher::mesh_grid;
 
     #[test]
@@ -284,5 +355,27 @@ mod tests {
         let sz = parts.hull.size_m();
         assert!((sz.x - spec.profile.hull_width).abs() < 0.5, "sz={sz:?}");
         assert!((sz.z - spec.profile.hull_length).abs() < 0.6, "sz={sz:?}");
+    }
+
+    #[test]
+    fn all_five_tanks_build_distinct_non_empty_voxel_models() {
+        let tanks = available_tanks();
+        assert_eq!(tanks.len(), 5);
+        let mut counts = Vec::new();
+        for t in &tanks {
+            let parts = build_tank_parts(&t.profile);
+            let h = parts.hull.count_solid();
+            let tr = parts.turret.count_solid();
+            let b = parts.barrel.count_solid();
+            assert!(h > 400 && tr > 60 && b > 15, "{}: {h}/{tr}/{b}", t.id);
+            assert!(!mesh_grid(&parts.hull).is_empty());
+            assert!(!mesh_grid(&parts.turret).is_empty());
+            assert!(!mesh_grid(&parts.barrel).is_empty());
+            counts.push((t.id.clone(), h, tr, b));
+        }
+        // Гарантируем различие моделей между лёгким M24 и тяжёлым Tiger I.
+        let m24 = counts.iter().find(|c| c.0 == "m24_chaffee").unwrap();
+        let tiger = counts.iter().find(|c| c.0 == "tiger_1").unwrap();
+        assert!(tiger.1 > m24.1 && tiger.3 > m24.3);
     }
 }

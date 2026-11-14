@@ -50,9 +50,9 @@
         (name: "250м • 45мм @ 73° (рикошет)", pos_xz: (11.0, -135.0), thickness_mm: 45.0, slope_deg: 73.0, size_xy: (3.2, 2.4)),
     ],
     enemy_spawns: [
-        (pos_xz: (-20.0, -55.0), yaw_deg: 180.0, tank_id: Some("t34_85")),
-        (pos_xz: (24.0, -45.0), yaw_deg: 180.0, tank_id: Some("t34_85")),
-        (pos_xz: (0.0, -108.0), yaw_deg: 180.0, tank_id: Some("t34_85")),
+        (pos_xz: (-20.0, -55.0), yaw_deg: 180.0, tank_id: Some("m24_chaffee")),
+        (pos_xz: (24.0, -45.0), yaw_deg: 180.0, tank_id: Some("su_100")),
+        (pos_xz: (0.0, -108.0), yaw_deg: 180.0, tank_id: Some("tiger_1")),
     ],
     waypoints: [
         (-16.0, -15.0),

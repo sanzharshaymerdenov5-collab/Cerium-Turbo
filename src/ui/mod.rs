@@ -11,7 +11,8 @@ pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(GameState::Hangar), hangar::setup_hangar)
+        app.init_resource::<hangar::HangarViewState>()
+            .add_systems(OnEnter(GameState::Hangar), hangar::setup_hangar)
             .add_systems(Update, hangar::update_hangar.run_if(in_state(GameState::Hangar)))
             .add_systems(OnEnter(GameState::InBattle), hud::setup_hud)
             .add_systems(Update, hud::update_hud.run_if(in_state(GameState::InBattle)));

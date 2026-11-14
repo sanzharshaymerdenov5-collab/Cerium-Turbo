@@ -4,7 +4,7 @@ use std::f32::consts::{FRAC_PI_2, PI};
 
 use bevy::prelude::*;
 
-use super::spec::{ArmorZone, TankSpec};
+use super::spec::{ArmorZone, HullShape, TankSpec, TurretShape};
 use crate::ballistics::{ArmorPlate, TargetInfo};
 use crate::core::{GameState, Team};
 
@@ -78,14 +78,40 @@ pub fn hull_plate_specs(spec: &TankSpec) -> Vec<TankPlateDesc> {
     let vld_rot = Quat::from_rotation_x(slope_rad) * Quat::from_rotation_y(PI);
     let nld_rot = Quat::from_rotation_x(-38f32.to_radians()) * Quat::from_rotation_y(PI);
 
-    vec![
-        TankPlateDesc {
+    let mut plates = Vec::new();
+    if p.hull_shape == HullShape::PikeNose {
+        // «Щучий нос» ИС-3: левая и правая скулы ВЛД с разворотом по курсу и наклоном.
+        let half_x = inner_w * 0.52;
+        let pike_yaw = 24f32.to_radians();
+        let right_rot =
+            Quat::from_rotation_y(-pike_yaw) * Quat::from_rotation_x(slope_rad) * Quat::from_rotation_y(PI);
+        let left_rot =
+            Quat::from_rotation_y(pike_yaw) * Quat::from_rotation_x(slope_rad) * Quat::from_rotation_y(PI);
+        plates.push(TankPlateDesc {
+            zone: ArmorZone::HullFrontUpper,
+            local_pos: Vec3::new(-half_x * 0.9, p.deck_height * 0.78, -hl * 0.84),
+            local_rot: left_rot,
+            half_extents: Vec2::new(half_x * 1.05, 0.46),
+            thickness_mm: a.hull_front_upper_mm,
+        });
+        plates.push(TankPlateDesc {
+            zone: ArmorZone::HullFrontUpper,
+            local_pos: Vec3::new(half_x * 0.9, p.deck_height * 0.78, -hl * 0.84),
+            local_rot: right_rot,
+            half_extents: Vec2::new(half_x * 1.05, 0.46),
+            thickness_mm: a.hull_front_upper_mm,
+        });
+    } else {
+        plates.push(TankPlateDesc {
             zone: ArmorZone::HullFrontUpper,
             local_pos: Vec3::new(0.0, p.deck_height * 0.78, -hl * 0.90),
             local_rot: vld_rot,
             half_extents: Vec2::new(inner_w * 0.92, 0.46),
             thickness_mm: a.hull_front_upper_mm,
-        },
+        });
+    }
+
+    plates.extend([
         TankPlateDesc {
             zone: ArmorZone::HullFrontLower,
             local_pos: Vec3::new(0.0, 0.50, -hl * 0.96),
@@ -121,7 +147,8 @@ pub fn hull_plate_specs(spec: &TankSpec) -> Vec<TankPlateDesc> {
             half_extents: Vec2::new(inner_w * 0.90, hl * 0.80),
             thickness_mm: a.hull_roof_mm,
         },
-    ]
+    ]);
+    plates
 }
 
 /// Строит локальные бронеплиты башни/рубки (относительно `TurretPivot`).
@@ -132,7 +159,13 @@ pub fn turret_plate_specs(spec: &TankSpec) -> Vec<TankPlateDesc> {
     let rz = p.turret_radius_z;
     let th = p.turret_height;
 
-    let front_rot = Quat::from_rotation_x(16f32.to_radians()) * Quat::from_rotation_y(PI);
+    let front_slope_deg: f32 = match p.turret_shape {
+        TurretShape::FixedCasemate => 50.0,
+        TurretShape::RoundedDome => 32.0,
+        TurretShape::BoxHeavy => 6.0,
+        _ => 16.0,
+    };
+    let front_rot = Quat::from_rotation_x(front_slope_deg.to_radians()) * Quat::from_rotation_y(PI);
 
     vec![
         TankPlateDesc {
@@ -267,5 +300,26 @@ mod tests {
             .unwrap();
         let tf_n = tf.local_rot * Vec3::Z;
         assert!(tf_n.z < -0.9 && tf_n.y > 0.1, "tf_n={tf_n:?}");
+    }
+
+    #[test]
+    fn is3_pike_nose_has_two_angled_cheeks_and_su100_has_sloped_casemate() {
+        let is3 = load_tank_spec("is_3").unwrap();
+        let hull = hull_plate_specs(&is3);
+        let vlds: Vec<_> = hull
+            .iter()
+            .filter(|p| p.zone == ArmorZone::HullFrontUpper)
+            .collect();
+        assert_eq!(vlds.len(), 2);
+        let n_left = vlds[0].local_rot * Vec3::Z;
+        let n_right = vlds[1].local_rot * Vec3::Z;
+        assert!(n_left.x < -0.15 && n_left.z < -0.3 && n_left.y > 0.6, "n_left={n_left:?}");
+        assert!(n_right.x > 0.15 && n_right.z < -0.3 && n_right.y > 0.6, "n_right={n_right:?}");
+
+        let su = load_tank_spec("su_100").unwrap();
+        let su_t = turret_plate_specs(&su);
+        let tf = su_t.iter().find(|p| p.zone == ArmorZone::TurretFront).unwrap();
+        let n = tf.local_rot * Vec3::Z;
+        assert!(n.y > 0.7 && n.z < -0.5, "SU-100 front casemate n={n:?}");
     }
 }

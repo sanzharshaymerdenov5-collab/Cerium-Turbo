@@ -1,7 +1,7 @@
 (
     id: "t34_85",
     name: "Т-34-85",
-    nation: "СССР",
+    nation: "СССР (СТ)",
     max_hp: 850.0,
     mass_kg: 32000.0,
     max_speed_kmh: 55.0,

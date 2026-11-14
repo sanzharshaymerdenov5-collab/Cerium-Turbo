@@ -14,12 +14,13 @@ use crate::core::GameState;
 pub use armor::{ArmorOwner, TankCombat};
 pub use camera::{AimPlateInfo, AimTarget, TankCamera, spawn_battle_camera};
 pub use spawn::{
-    AimCommand, GunPivot, MuzzlePoint, PlayerTank, Suspension, TankRoot, TankState, TurretPivot,
-    spawn_preview_tank, spawn_tank,
+    AimCommand, GunPivot, HangarPreviewTank, MuzzlePoint, PlayerTank, Suspension, TankRoot,
+    TankState, TurretPivot, spawn_preview_tank, spawn_tank,
 };
 pub use spec::{
-    ArmorScheme, ArmorZone, HullShape, ProceduralTankProfile, T34_85_RON, TankSpec, TurretShape,
-    VoxelVisualSource, available_tanks, load_tank_spec,
+    ArmorScheme, ArmorZone, HullShape, IS_3_RON, M24_CHAFFEE_RON, ProceduralTankProfile,
+    SU_100_RON, T34_85_RON, TIGER_1_RON, TankSpec, TurretShape, VoxelVisualSource,
+    available_tanks, load_tank_spec,
 };
 
 pub struct TankPlugin;
