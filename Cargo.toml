@@ -35,6 +35,13 @@ bevy = { version = "0.20", default-features = false, features = [
     "bevy_text",
     "bevy_ui",
     "bevy_ui_render",
+    "bevy_ui_widgets",
+    "bevy_picking",
+    "bevy_input_focus",
+    "bevy_scene",
+    "keyboard",
+    "mouse",
+    "touch",
     "default_font",
     "png",
     "tonemapping_luts",
@@ -59,8 +66,7 @@ avian3d = { version = "0.8", default-features = false, features = ["parallel"] }
 # Веб-сборка (GitHub Pages): WebGL2, однопоточный WASM.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 bevy = { version = "0.20", default-features = false, features = ["web", "webgl2"] }
-getrandom = { version = "0.4", features = ["wasm_js"] }
-getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [profile.dev]
 opt-level = 1

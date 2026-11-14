@@ -15,6 +15,18 @@ pub mod voxel;
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+/// Подключает физику и все игровые плагины приложения.
+pub fn configure_game_plugins(app: &mut App) {
+    app.add_plugins(PhysicsPlugins::default()).add_plugins((
+        core::CorePlugin,
+        voxel::VoxelPlugin,
+        maps::MapPlugin,
+        tank::TankPlugin,
+        ballistics::BallisticsPlugin,
+        ui::UiPlugin,
+    ));
+}
+
 /// Собирает полноценное приложение игры (окно, физика, воксели, танк, UI).
 pub fn build_app() -> App {
     let mut app = App::new();
@@ -35,15 +47,86 @@ pub fn build_app() -> App {
                 filter: "wgpu=error,naga=warn,bevy_render=warn,bevy_app=warn".into(),
                 ..default()
             }),
-    )
-    .add_plugins(PhysicsPlugins::default())
-    .add_plugins((
-        core::CorePlugin,
-        voxel::VoxelPlugin,
-        maps::MapPlugin,
-        tank::TankPlugin,
-        ballistics::BallisticsPlugin,
-        ui::UiPlugin,
-    ));
+    );
+    configure_game_plugins(&mut app);
     app
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::render::{
+        RenderPlugin,
+        settings::{RenderCreation, WgpuSettings},
+    };
+    use bevy::winit::WinitPlugin;
+
+    #[test]
+    fn app_runs_hangar_battle_and_exit_without_missing_resources() {
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .build()
+                .disable::<WinitPlugin>()
+                .disable::<bevy::log::LogPlugin>()
+                .set(WindowPlugin {
+                    primary_window: Some(Window::default()),
+                    exit_condition: bevy::window::ExitCondition::DontExit,
+                    ..default()
+                })
+                .set(RenderPlugin {
+                    render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                        backends: None,
+                        ..default()
+                    })),
+                    ..default()
+                }),
+        );
+        configure_game_plugins(&mut app);
+        app.finish();
+        app.cleanup();
+
+        // Несколько кадров в ангаре (проверка StateTransition, First, PreUpdate, Update, PostUpdate).
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(
+            *app.world().resource::<State<core::GameState>>().get(),
+            core::GameState::Hangar
+        );
+
+        // Переход в бой.
+        app.world_mut()
+            .resource_mut::<NextState<core::GameState>>()
+            .set(core::GameState::InBattle);
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_eq!(
+            *app.world().resource::<State<core::GameState>>().get(),
+            core::GameState::InBattle
+        );
+        assert!(app.world().contains_resource::<voxel::VoxelWorld>());
+
+        // Выстрел + шаг физики (проверка projectile/tank/turret/camera/hud систем).
+        {
+            let mut q = app.world_mut().query::<&mut tank::TankState>();
+            for mut st in q.iter_mut(app.world_mut()) {
+                st.throttle = 1.0;
+                st.fire_queued = true;
+            }
+        }
+        for _ in 0..3 {
+            app.update();
+        }
+
+        // Возврат в ангар и очистка мира.
+        app.world_mut()
+            .resource_mut::<NextState<core::GameState>>()
+            .set(core::GameState::Hangar);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(!app.world().contains_resource::<voxel::VoxelWorld>());
+    }
 }

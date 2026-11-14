@@ -73,7 +73,6 @@ pub struct VoxelPlugin;
 impl Plugin for VoxelPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ChunkEntities>()
-            .add_systems(PreStartup, setup_voxel_assets)
             .add_systems(
                 Update,
                 rebuild_dirty_chunks
@@ -82,45 +81,65 @@ impl Plugin for VoxelPlugin {
             )
             .add_systems(Update, update_debris)
             .add_systems(OnExit(GameState::InBattle), cleanup_world);
+
+        if app.world().contains_resource::<Assets<StandardMaterial>>()
+            && app.world().contains_resource::<Assets<Mesh>>()
+        {
+            app.init_resource::<VoxelAssets>();
+        }
+    }
+
+    fn finish(&self, app: &mut App) {
+        if !app.world().contains_resource::<VoxelAssets>()
+            && app.world().contains_resource::<Assets<StandardMaterial>>()
+            && app.world().contains_resource::<Assets<Mesh>>()
+        {
+            app.init_resource::<VoxelAssets>();
+        }
     }
 }
 
-fn setup_voxel_assets(
-    mut commands: Commands,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-) {
-    let material = materials.add(StandardMaterial {
-        base_color: Color::WHITE,
-        perceptual_roughness: 0.95,
-        metallic: 0.0,
-        reflectance: 0.08,
-        ..default()
-    });
-    let tracer = materials.add(StandardMaterial {
-        base_color: Color::srgb(1.0, 0.85, 0.3),
-        emissive: LinearRgba::new(6.0, 4.0, 1.0, 1.0),
-        unlit: true,
-        ..default()
-    });
-    let mut debris = HashMap::new();
-    for m in ALL_MATERIALS {
-        let c = m.linear_rgba();
-        debris.insert(
-            m,
-            materials.add(StandardMaterial {
-                base_color: Color::linear_rgb(c[0], c[1], c[2]),
-                perceptual_roughness: 1.0,
+impl FromWorld for VoxelAssets {
+    fn from_world(world: &mut World) -> Self {
+        let (material, tracer, debris) = {
+            let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+            let material = materials.add(StandardMaterial {
+                base_color: Color::WHITE,
+                perceptual_roughness: 0.95,
+                metallic: 0.0,
+                reflectance: 0.08,
                 ..default()
-            }),
-        );
+            });
+            let tracer = materials.add(StandardMaterial {
+                base_color: Color::srgb(1.0, 0.85, 0.3),
+                emissive: LinearRgba::new(6.0, 4.0, 1.0, 1.0),
+                unlit: true,
+                ..default()
+            });
+            let mut debris = HashMap::new();
+            for m in ALL_MATERIALS {
+                let c = m.linear_rgba();
+                debris.insert(
+                    m,
+                    materials.add(StandardMaterial {
+                        base_color: Color::linear_rgb(c[0], c[1], c[2]),
+                        perceptual_roughness: 1.0,
+                        ..default()
+                    }),
+                );
+            }
+            (material, tracer, debris)
+        };
+        let cube = world
+            .resource_mut::<Assets<Mesh>>()
+            .add(Cuboid::new(1.0, 1.0, 1.0));
+        Self {
+            material,
+            cube,
+            tracer,
+            debris,
+        }
     }
-    commands.insert_resource(VoxelAssets {
-        material,
-        cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-        tracer,
-        debris,
-    });
 }
 
 /// Удаляет мир при выходе из боя.
