@@ -4,6 +4,9 @@
 //! - Этап 3+: `ArcadeHpAndModules` (общее ХП + ХП модулей, стиль WoT).
 //! - Этап 6: `ModulesOnlyWt` (только модули и экипаж без общего ХП, стиль War Thunder).
 
+pub mod hp_model;
+pub mod modules;
+
 use bevy::prelude::*;
 
 use crate::ballistics::{ArmorImpactMessage, HitKind, HitLog, penetration::ImpactOutcome};
@@ -11,13 +14,23 @@ use crate::core::{BattleStatus, DamageRulesMode, GameState, Team};
 use crate::tank::TankCombat;
 use crate::voxel::{Material, Rng, VoxelAssets, spawn_debris_burst};
 
+pub use hp_model::{
+    DamageFeed, PenIndicator, TankHealth, classify_penetration, destroy_tank,
+};
+pub use modules::{ModuleKind, ModuleState, TankModules};
+
 pub struct DamagePlugin;
 
 impl Plugin for DamagePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.init_resource::<DamageFeed>().add_systems(
             Update,
-            (handle_prototype_impacts, update_battle_status)
+            (
+                handle_prototype_impacts,
+                hp_model::handle_arcade_hp_impacts,
+                hp_model::tick_modules_repair_and_fire,
+                update_battle_status,
+            )
                 .chain()
                 .run_if(in_state(GameState::InBattle)),
         );

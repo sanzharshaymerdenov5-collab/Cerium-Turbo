@@ -1,36 +1,53 @@
-//! Боевой HUD: телеметрия танка, перезарядка, дальномер, перекрестие, снайперский прицел, лог попаданий.
+//! Боевой HUD: телеметрия танка, ХП и кукла модулей (Этап 3), цветной маркер пробития,
+//! всплывающий фид урона, дальномер, снайперский прицел и лог попаданий.
 
 use bevy::prelude::*;
 
 use crate::ballistics::HitLog;
-use crate::core::{BattleStatus, GameState, Team};
+use crate::ballistics::penetration::{effective_armor_mm, penetration_at};
+use crate::core::{BattleStatus, DamageRulesMode, GameState, Team};
+use crate::damage::{
+    DamageFeed, ModuleKind, ModuleState, PenIndicator, TankHealth, TankModules,
+    classify_penetration,
+};
 use crate::tank::{AimTarget, PlayerTank, TankCamera, TankCombat, TankRoot, TankState};
 
-#[derive(Component)]
-pub struct TelemetryText;
-
-#[derive(Component)]
-pub struct AimText;
-
-#[derive(Component)]
-pub struct HitLogText;
-
-#[derive(Component)]
-pub struct SniperOverlay;
-
-#[derive(Component)]
-pub struct BattleBanner;
-
-#[derive(Component)]
-pub struct BattleBannerText;
-
-#[derive(Component)]
-pub struct EnemyMarker(pub usize);
-
-#[derive(Component)]
-pub struct EnemyMarkerText(pub usize);
-
 const MAX_ENEMY_MARKERS: usize = 8;
+
+const ALL_MODULES: [ModuleKind; 7] = [
+    ModuleKind::LeftTrack,
+    ModuleKind::RightTrack,
+    ModuleKind::Engine,
+    ModuleKind::TurretRing,
+    ModuleKind::GunBreech,
+    ModuleKind::AmmoRack,
+    ModuleKind::FuelTank,
+];
+
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub enum HudText {
+    Telemetry,
+    Crosshair,
+    Aim,
+    DamageFeed,
+    HitLog,
+    HpHeader,
+    Consumables,
+    BattleBanner,
+    EnemyMarker(usize),
+    ModuleBadge(ModuleKind),
+}
+
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub enum HudPanel {
+    HullHp,
+    HpBarFill,
+    FireAlert,
+    ModuleBox(ModuleKind),
+    BattleBanner,
+    EnemyMarker(usize),
+    SniperOverlay,
+}
 
 pub fn setup_hud(mut commands: Commands) {
     commands
@@ -46,7 +63,7 @@ pub fn setup_hud(mut commands: Commands) {
             DespawnOnExit(GameState::InBattle),
         ))
         .with_children(|root| {
-            // Верхняя строка: слева телеметрия, справа управление.
+            // Верхняя строка: слева телеметрия, справа подсказка управления.
             root.spawn(Node {
                 width: Val::Percent(100.0),
                 justify_content: JustifyContent::SpaceBetween,
@@ -65,9 +82,9 @@ pub fn setup_hud(mut commands: Commands) {
                 ))
                 .with_children(|p| {
                     p.spawn((
-                        TelemetryText,
+                        HudText::Telemetry,
                         Text::new("Т-34-85"),
-                        TextFont::from_font_size(16.0),
+                        TextFont::from_font_size(15.0),
                         TextColor(Color::srgb(0.90, 0.95, 0.88)),
                     ));
                 });
@@ -84,62 +101,189 @@ pub fn setup_hud(mut commands: Commands) {
                 .with_children(|p| {
                     p.spawn((
                         Text::new(
-                            "WASD: ход и поворот  |  Мышь: башня/прицел  |  ЛКМ/Пробел: огонь\n\
-                             Shift: снайперский прицел  |  R: на гусеницы  |  Tab: ангар  |  Esc: курсор",
+                            "WASD: ход/поворот  |  Мышь: башня/прицел  |  ЛКМ/Пробел: огонь\n\
+                             Shift: снайперский  |  5: Ремкомпл.  |  6: Огнетуш.  |  R: на гусеницы  |  Tab: ангар",
                         ),
-                        TextFont::from_font_size(14.0),
+                        TextFont::from_font_size(13.0),
                         TextColor(Color::srgb(0.78, 0.83, 0.88)),
                     ));
                 });
             });
 
-            // Центр: прицел + дальномер.
+            // Центр: цветное перекрестие, дальномер и всплывающий фид урона.
             root.spawn(Node {
                 width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
+                row_gap: Val::Px(4.0),
                 ..default()
             })
             .with_children(|center| {
                 center.spawn((
+                    HudText::Crosshair,
                     Text::new("+"),
-                    TextFont::from_font_size(28.0),
+                    TextFont::from_font_size(30.0),
                     TextColor(Color::srgba(0.95, 1.0, 0.4, 0.92)),
                 ));
                 center.spawn((
-                    AimText,
+                    HudText::Aim,
                     Text::new(""),
                     TextFont::from_font_size(15.0),
                     TextColor(Color::srgb(0.95, 0.96, 0.72)),
                 ));
+                center.spawn((
+                    HudText::DamageFeed,
+                    Text::new(""),
+                    TextFont::from_font_size(16.0),
+                    TextColor(Color::srgb(1.0, 0.72, 0.25)),
+                ));
             });
 
-            // Низ: журнал попаданий и разрушений.
-            root.spawn((
-                Node {
-                    min_width: Val::Px(460.0),
-                    max_width: Val::Px(700.0),
-                    padding: UiRect::all(Val::Px(12.0)),
-                    border: UiRect::all(Val::Px(1.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(0.05, 0.07, 0.09, 0.78)),
-                BorderColor::all(Color::srgb(0.30, 0.36, 0.42)),
-            ))
-            .with_children(|p| {
-                p.spawn((
-                    HitLogText,
-                    Text::new("Журнал попаданий (уничтожьте врагов ИИ и испытайте бронестенды)"),
-                    TextFont::from_font_size(15.0),
-                    TextColor(Color::srgb(0.88, 0.91, 0.95)),
-                ));
+            // Нижняя строка: слева панель ХП/модулей (WoT), справа журнал попаданий.
+            root.spawn(Node {
+                width: Val::Percent(100.0),
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::FlexEnd,
+                column_gap: Val::Px(12.0),
+                ..default()
+            })
+            .with_children(|bottom| {
+                // Панель ХП и кукла модулей (Этап 3).
+                bottom
+                    .spawn((
+                        HudPanel::HullHp,
+                        Node {
+                            width: Val::Px(360.0),
+                            padding: UiRect::all(Val::Px(10.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(6.0),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(0.05, 0.07, 0.09, 0.82)),
+                        BorderColor::all(Color::srgb(0.32, 0.46, 0.30)),
+                        Visibility::Visible,
+                    ))
+                    .with_children(|hp| {
+                        hp.spawn((
+                            HudText::HpHeader,
+                            Text::new("ПРОЧНОСТЬ: 850 / 850 HP"),
+                            TextFont::from_font_size(15.0),
+                            TextColor(Color::srgb(0.88, 0.96, 0.86)),
+                        ));
+
+                        // Полоса прочности.
+                        hp.spawn((
+                            Node {
+                                width: Val::Percent(100.0),
+                                height: Val::Px(14.0),
+                                border: UiRect::all(Val::Px(1.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.12, 0.05, 0.05, 0.9)),
+                            BorderColor::all(Color::srgb(0.25, 0.30, 0.35)),
+                        ))
+                        .with_children(|bar| {
+                            bar.spawn((
+                                HudPanel::HpBarFill,
+                                Node {
+                                    width: Val::Percent(100.0),
+                                    height: Val::Percent(100.0),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgb(0.24, 0.80, 0.34)),
+                                Visibility::Inherited,
+                            ));
+                        });
+
+                        // Предупреждение о пожаре.
+                        hp.spawn((
+                            HudPanel::FireAlert,
+                            Node {
+                                padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.55, 0.12, 0.06, 0.94)),
+                            BorderColor::all(Color::srgb(1.0, 0.45, 0.20)),
+                            Visibility::Hidden,
+                        ))
+                        .with_children(|f| {
+                            f.spawn((
+                                Text::new("ПОЖАР! Нажмите [6] Огнетушитель"),
+                                TextFont::from_font_size(13.0),
+                                TextColor(Color::srgb(1.0, 0.92, 0.80)),
+                            ));
+                        });
+
+                        // Сетка модулей (кукла повреждений).
+                        hp.spawn(Node {
+                            width: Val::Percent(100.0),
+                            flex_wrap: FlexWrap::Wrap,
+                            column_gap: Val::Px(5.0),
+                            row_gap: Val::Px(5.0),
+                            ..default()
+                        })
+                        .with_children(|grid| {
+                            for kind in ALL_MODULES {
+                                grid.spawn((
+                                    HudPanel::ModuleBox(kind),
+                                    Node {
+                                        padding: UiRect::axes(Val::Px(7.0), Val::Px(3.0)),
+                                        border: UiRect::all(Val::Px(1.0)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgba(0.08, 0.16, 0.10, 0.85)),
+                                    BorderColor::all(Color::srgb(0.26, 0.56, 0.30)),
+                                    Visibility::Inherited,
+                                ))
+                                .with_children(|b| {
+                                    b.spawn((
+                                        HudText::ModuleBadge(kind),
+                                        Text::new(kind.ru_short()),
+                                        TextFont::from_font_size(12.0),
+                                        TextColor(Color::srgb(0.80, 0.96, 0.82)),
+                                    ));
+                                });
+                            }
+                        });
+
+                        hp.spawn((
+                            HudText::Consumables,
+                            Text::new("[5] Ремкомплект (2)  |  [6] Огнетушитель (2)"),
+                            TextFont::from_font_size(12.0),
+                            TextColor(Color::srgb(0.76, 0.82, 0.88)),
+                        ));
+                    });
+
+                // Журнал попаданий.
+                bottom
+                    .spawn((
+                        Node {
+                            min_width: Val::Px(420.0),
+                            max_width: Val::Px(640.0),
+                            padding: UiRect::all(Val::Px(12.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(0.05, 0.07, 0.09, 0.78)),
+                        BorderColor::all(Color::srgb(0.30, 0.36, 0.42)),
+                    ))
+                    .with_children(|p| {
+                        p.spawn((
+                            HudText::HitLog,
+                            Text::new("Журнал попаданий (уничтожьте врагов ИИ и испытайте бронестенды)"),
+                            TextFont::from_font_size(14.0),
+                            TextColor(Color::srgb(0.88, 0.91, 0.95)),
+                        ));
+                    });
             });
         });
 
     // Баннер победы/поражения по центру.
     commands
         .spawn((
-            BattleBanner,
+            HudPanel::BattleBanner,
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Percent(20.0),
@@ -157,7 +301,7 @@ pub fn setup_hud(mut commands: Commands) {
         ))
         .with_children(|b| {
             b.spawn((
-                BattleBannerText,
+                HudText::BattleBanner,
                 Text::new(""),
                 TextFont::from_font_size(24.0),
                 TextColor(Color::WHITE),
@@ -168,7 +312,7 @@ pub fn setup_hud(mut commands: Commands) {
     for i in 0..MAX_ENEMY_MARKERS {
         commands
             .spawn((
-                EnemyMarker(i),
+                HudPanel::EnemyMarker(i),
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Px(0.0),
@@ -177,24 +321,24 @@ pub fn setup_hud(mut commands: Commands) {
                     border: UiRect::all(Val::Px(1.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.18, 0.05, 0.04, 0.72)),
+                BackgroundColor(Color::srgba(0.18, 0.05, 0.04, 0.76)),
                 BorderColor::all(Color::srgb(0.92, 0.35, 0.20)),
                 Visibility::Hidden,
                 DespawnOnExit(GameState::InBattle),
             ))
             .with_children(|m| {
                 m.spawn((
-                    EnemyMarkerText(i),
+                    HudText::EnemyMarker(i),
                     Text::new(""),
                     TextFont::from_font_size(12.0),
-                    TextColor(Color::srgb(1.0, 0.78, 0.68)),
+                    TextColor(Color::srgb(1.0, 0.80, 0.72)),
                 ));
             });
     }
 
     // Рамка снайперского прицела (по умолчанию скрыта).
     commands.spawn((
-        SniperOverlay,
+        HudPanel::SniperOverlay,
         Node {
             position_type: PositionType::Absolute,
             left: Val::Px(0.0),
@@ -214,47 +358,32 @@ pub fn setup_hud(mut commands: Commands) {
 pub fn update_hud(
     keys: Res<ButtonInput<KeyCode>>,
     mut next_state: ResMut<NextState<GameState>>,
+    mode: Res<DamageRulesMode>,
     aim: Res<AimTarget>,
     log: Res<HitLog>,
+    feed: Res<DamageFeed>,
     status: Res<BattleStatus>,
-    player_q: Query<(&GlobalTransform, &TankRoot, &TankState, &TankCombat), With<PlayerTank>>,
-    all_combat: Query<(&GlobalTransform, &TankCombat)>,
+    player_q: Query<
+        (
+            &GlobalTransform,
+            &TankRoot,
+            &TankState,
+            &TankCombat,
+            Option<&TankHealth>,
+            Option<&TankModules>,
+        ),
+        With<PlayerTank>,
+    >,
+    all_combat: Query<(&GlobalTransform, &TankCombat, Option<&TankHealth>)>,
     cams: Query<(&Camera, &GlobalTransform, &TankCamera), With<Camera3d>>,
-    mut telemetry_q: Query<
-        &mut Text,
-        (
-            With<TelemetryText>,
-            Without<AimText>,
-            Without<HitLogText>,
-            Without<BattleBannerText>,
-        ),
-    >,
-    mut aim_q: Query<
-        &mut Text,
-        (
-            With<AimText>,
-            Without<TelemetryText>,
-            Without<HitLogText>,
-            Without<BattleBannerText>,
-        ),
-    >,
-    mut log_q: Query<
-        &mut Text,
-        (
-            With<HitLogText>,
-            Without<TelemetryText>,
-            Without<AimText>,
-            Without<BattleBannerText>,
-        ),
-    >,
-    mut sniper_q: Query<&mut Visibility, (With<SniperOverlay>, Without<BattleBanner>, Without<EnemyMarker>)>,
-    mut banner_q: Query<(&mut Visibility, &mut BorderColor), (With<BattleBanner>, Without<SniperOverlay>, Without<EnemyMarker>)>,
-    mut banner_text_q: Query<&mut Text, (With<BattleBannerText>, Without<TelemetryText>, Without<AimText>, Without<HitLogText>)>,
-    mut marker_nodes: Query<(&EnemyMarker, &mut Node, &mut Visibility), (Without<SniperOverlay>, Without<BattleBanner>)>,
-    mut marker_texts: Query<
-        (&EnemyMarkerText, &mut Text),
-        (Without<TelemetryText>, Without<AimText>, Without<HitLogText>, Without<BattleBannerText>),
-    >,
+    mut texts: Query<(&HudText, &mut Text, Option<&mut TextColor>)>,
+    mut panels: Query<(
+        &HudPanel,
+        &mut Node,
+        &mut Visibility,
+        Option<&mut BackgroundColor>,
+        Option<&mut BorderColor>,
+    )>,
 ) {
     if keys.just_pressed(KeyCode::Tab) {
         next_state.set(GameState::Hangar);
@@ -263,128 +392,321 @@ pub fn update_hud(
 
     let cam_opt = cams.iter().next();
     let sniper = cam_opt.is_some_and(|(_, _, c)| c.sniper);
-    for mut v in &mut sniper_q {
-        *v = if sniper {
-            Visibility::Visible
-        } else {
-            Visibility::Hidden
-        };
-    }
 
     let mut enemy_total = 0usize;
     let mut enemy_alive = 0usize;
     let mut alive_enemies = Vec::new();
-    for (gt, c) in &all_combat {
+    for (gt, c, h) in &all_combat {
         if c.team == Team::Enemy {
             enemy_total += 1;
             if c.alive {
                 enemy_alive += 1;
-                alive_enemies.push((gt.translation(), c));
+                alive_enemies.push((gt.translation(), c, h.copied()));
             }
         }
     }
 
-    let player_pos = player_q.single().ok().map(|(gt, _, _, _)| gt.translation());
-    if let (Ok((_, root, st, combat)), Ok(mut txt)) = (player_q.single(), telemetry_q.single_mut()) {
+    let player = player_q.single().ok();
+    let player_pos = player.map(|(gt, _, _, _, _, _)| gt.translation());
+    let pen_ind = match (player, aim.target_plate) {
+        (Some((_, root, _, _, _, _)), Some(plate)) => classify_penetration(
+            &root.spec.shell,
+            aim.distance,
+            plate.thickness_mm,
+            plate.angle_deg,
+        ),
+        _ => PenIndicator::None,
+    };
+
+    // Подготовка текстов.
+    let telemetry_str = if let Some((_, root, st, combat, health_opt, mods_opt)) = player {
         let gun_status = if !combat.alive {
             "ТАНК УНИЧТОЖЕН".to_string()
+        } else if combat.gun_jammed {
+            "КАЗЁННИК ВЫБИТ!".to_string()
         } else if st.reload_timer <= 0.01 {
             "ГОТОВО К ВЫСТРЕЛУ".to_string()
         } else {
             format!("ПЕРЕЗАРЯДКА {:.1} с", st.reload_timer)
         };
-        let mode = if sniper { "СНАЙПЕР (x3)" } else { "АРКАДНЫЙ" };
-        let dmg_left = combat.prototype_max_hits.saturating_sub(combat.prototype_hits);
-        txt.0 = format!(
-            "{}  |  Скорость: {:+.1} км/ч  |  Катки: {}/8\n\
-             Прочность (прототип): {}/{} попаданий  |  Враги: {}/{}\n\
+        let scope_str = if sniper { "СНАЙПЕР (x3)" } else { "АРКАДНЫЙ" };
+        let hp_line = match (*mode, health_opt) {
+            (DamageRulesMode::ArcadeHpAndModules, Some(h)) => {
+                format!("Прочность: {:.0}/{:.0} HP", h.hp, h.max_hp)
+            }
+            (DamageRulesMode::ModulesOnlyWt, _) => {
+                "Режим War Thunder: без общего ХП".to_string()
+            }
+            _ => {
+                let left = combat.prototype_max_hits.saturating_sub(combat.prototype_hits);
+                format!("Прочность (прототип): {}/{}", left, combat.prototype_max_hits)
+            }
+        };
+        let ice_warn = if st.surface_traction > 0.0 && st.surface_traction < 0.5 {
+            "  •  ГОЛОЛЁД!"
+        } else {
+            ""
+        };
+        let fire_warn = if mods_opt.is_some_and(|m| m.fire_timer > 0.0) {
+            "  •  ПОЖАР!"
+        } else {
+            ""
+        };
+        format!(
+            "{} [{}]  |  Скорость: {:+.1} км/ч  |  Катки: {}/8{}{}\n\
+             {}  |  Враги: {}/{}\n\
              Орудие {:.0} мм: {}  |  Прицел: {}\n\
              Снаряд: ТОЛЬКО сплошной SolidAP • Выстрелов: {} (пробитий: {})",
             root.spec.name,
+            mode.ru_label(),
             st.speed_kmh,
             st.grounded_wheels,
-            dmg_left,
-            combat.prototype_max_hits,
+            ice_warn,
+            fire_warn,
+            hp_line,
             enemy_alive,
             enemy_total,
             root.spec.shell.caliber_mm,
             gun_status,
-            mode,
+            scope_str,
             log.shots,
             log.penetrations,
-        );
-    }
+        )
+    } else {
+        String::new()
+    };
 
-    if let Ok(mut txt) = aim_q.single_mut() {
+    let aim_str = {
         let err = aim.point.distance(aim.gun_point);
         let spread = if err < 0.8 { "СВЕДЁН" } else { "НАВОДКА..." };
-        txt.0 = match &aim.target_name {
-            Some(name) => format!("{:.0} м  •  {}  [{}]", aim.distance, name, spread),
-            None => format!("{:.0} м  [{}]", aim.distance, spread),
-        };
-    }
-
-    if let Ok(mut txt) = log_q.single_mut() {
-        if log.entries.is_empty() {
-            txt.0 = "Журнал попаданий: ищите и уничтожайте вражеские Т-34-85 или проверьте бронеплиты"
-                .to_string();
-        } else {
-            let mut s = String::from("Журнал попаданий:\n");
-            for e in log.entries.iter().rev() {
-                s.push_str("• ");
-                s.push_str(&e.text);
-                s.push('\n');
+        match (&aim.target_name, aim.target_plate, player) {
+            (Some(name), Some(plate), Some((_, root, _, _, _, _))) => {
+                let eff = effective_armor_mm(&root.spec.shell, plate.thickness_mm, plate.angle_deg);
+                let pen = penetration_at(&root.spec.shell, aim.distance);
+                format!(
+                    "{:.0} м  •  {} ({:.0}мм @ {:.0}° -> эфф. {:.0}мм / проб. {:.0}мм)  [{}]",
+                    aim.distance, name, plate.thickness_mm, plate.angle_deg, eff, pen, spread
+                )
             }
-            txt.0 = s.trim_end().to_string();
+            (Some(name), _, _) => format!("{:.0} м  •  {}  [{}]", aim.distance, name, spread),
+            (None, _, _) => format!("{:.0} м  [{}]", aim.distance, spread),
+        }
+    };
+
+    let (feed_str, feed_crit) = if feed.items.is_empty() {
+        (String::new(), false)
+    } else {
+        let crit = feed.items.iter().any(|i| i.critical);
+        let s = feed
+            .items
+            .iter()
+            .map(|i| i.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (s, crit)
+    };
+
+    let log_str = if log.entries.is_empty() {
+        "Журнал попаданий: ищите и уничтожайте врагов или проверьте бронестенды".to_string()
+    } else {
+        let mut s = String::from("Журнал попаданий:\n");
+        for e in log.entries.iter().rev() {
+            s.push_str("• ");
+            s.push_str(&e.text);
+            s.push('\n');
+        }
+        s.trim_end().to_string()
+    };
+
+    let hp_opt = player.and_then(|(_, _, _, _, h, _)| h);
+    let mods_opt = player.and_then(|(_, _, _, _, _, m)| m);
+
+    // Обновление текстовых элементов.
+    for (tag, mut txt, color_opt) in &mut texts {
+        match *tag {
+            HudText::Telemetry => txt.0 = telemetry_str.clone(),
+            HudText::Crosshair => {
+                if let Some(mut c) = color_opt {
+                    c.0 = match pen_ind {
+                        PenIndicator::Green => Color::srgb(0.28, 0.96, 0.36),
+                        PenIndicator::Yellow => Color::srgb(0.98, 0.82, 0.22),
+                        PenIndicator::Red => Color::srgb(0.96, 0.28, 0.26),
+                        PenIndicator::None => Color::srgba(0.95, 1.0, 0.4, 0.92),
+                    };
+                }
+            }
+            HudText::Aim => txt.0 = aim_str.clone(),
+            HudText::DamageFeed => {
+                txt.0 = feed_str.clone();
+                if let Some(mut c) = color_opt {
+                    c.0 = if feed_crit {
+                        Color::srgb(1.0, 0.56, 0.20)
+                    } else {
+                        Color::srgb(0.88, 0.96, 0.84)
+                    };
+                }
+            }
+            HudText::HitLog => txt.0 = log_str.clone(),
+            HudText::HpHeader => {
+                if let Some(h) = hp_opt {
+                    txt.0 = format!("ПРОЧНОСТЬ: {:.0} / {:.0} HP", h.hp, h.max_hp);
+                }
+            }
+            HudText::Consumables => {
+                if let Some(mods) = mods_opt {
+                    txt.0 = format!(
+                        "[5] Ремкомплект ({})  |  [6] Огнетушитель ({})",
+                        mods.repair_charges, mods.extinguisher_charges
+                    );
+                }
+            }
+            HudText::BattleBanner => match *status {
+                BattleStatus::Ongoing => {}
+                BattleStatus::Victory => {
+                    txt.0 = "ПОБЕДА! Все ИИ-танки уничтожены • [Tab] — вернуться в ангар"
+                        .to_string();
+                }
+                BattleStatus::Defeat => {
+                    txt.0 = "ПОРАЖЕНИЕ! Ваш танк подбит • [Tab] — вернуться в ангар".to_string();
+                }
+            },
+            HudText::ModuleBadge(kind) => {
+                if let Some(mods) = mods_opt {
+                    let m = mods.modules.iter().find(|m| m.kind == kind);
+                    let st = m.map_or(ModuleState::Intact, |x| x.state);
+                    let rem = m.map_or(0.0, |x| x.repair_timer);
+                    txt.0 = match st {
+                        ModuleState::Intact => kind.ru_short().to_string(),
+                        ModuleState::Damaged => format!("{} !", kind.ru_short()),
+                        ModuleState::Destroyed => {
+                            if rem > 0.05 {
+                                format!("{} {:.1}с", kind.ru_short(), rem)
+                            } else {
+                                format!("{} X", kind.ru_short())
+                            }
+                        }
+                    };
+                    if let Some(mut c) = color_opt {
+                        c.0 = match st {
+                            ModuleState::Intact => Color::srgb(0.80, 0.96, 0.82),
+                            ModuleState::Damaged => Color::srgb(1.0, 0.88, 0.35),
+                            ModuleState::Destroyed => Color::srgb(1.0, 0.55, 0.52),
+                        };
+                    }
+                }
+            }
+            HudText::EnemyMarker(idx) => {
+                if let Some(&(epos, ec, eh)) = alive_enemies.get(idx) {
+                    let dist = player_pos.map_or(0.0, |p| p.distance(epos));
+                    txt.0 = match (*mode, eh) {
+                        (DamageRulesMode::ArcadeHpAndModules, Some(h)) => {
+                            format!("▼ {} [{:.0}/{:.0} HP] {:.0}м", ec.tank_name, h.hp, h.max_hp, dist)
+                        }
+                        (DamageRulesMode::ModulesOnlyWt, _) => {
+                            format!("▼ {}  {:.0}м", ec.tank_name, dist)
+                        }
+                        _ => {
+                            let left = ec.prototype_max_hits.saturating_sub(ec.prototype_hits);
+                            format!("▼ {} [{}/{}] {:.0}м", ec.tank_name, left, ec.prototype_max_hits, dist)
+                        }
+                    };
+                }
+            }
         }
     }
 
-    // Баннер победы/поражения.
-    for (mut vis, mut border) in &mut banner_q {
-        match *status {
-            BattleStatus::Ongoing => {
-                *vis = Visibility::Hidden;
+    // Обновление панелей и маркеров.
+    let show_hp_panel = *mode == DamageRulesMode::ArcadeHpAndModules;
+    for (panel, mut node, mut vis, bg_opt, border_opt) in &mut panels {
+        match *panel {
+            HudPanel::SniperOverlay => {
+                *vis = if sniper {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                };
             }
-            BattleStatus::Victory => {
-                *vis = Visibility::Visible;
-                *border = BorderColor::all(Color::srgb(0.35, 0.88, 0.40));
-                for mut bt in &mut banner_text_q {
-                    bt.0 = "ПОБЕДА! Все ИИ-танки уничтожены • [Tab] — вернуться в ангар".to_string();
+            HudPanel::HullHp => {
+                *vis = if show_hp_panel {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                };
+            }
+            HudPanel::HpBarFill => {
+                if let Some(h) = hp_opt {
+                    let ratio = h.ratio();
+                    node.width = Val::Percent(ratio * 100.0);
+                    if let Some(mut bg) = bg_opt {
+                        bg.0 = if ratio > 0.6 {
+                            Color::srgb(0.24, 0.80, 0.34)
+                        } else if ratio > 0.25 {
+                            Color::srgb(0.92, 0.72, 0.16)
+                        } else {
+                            Color::srgb(0.90, 0.22, 0.20)
+                        };
+                    }
                 }
             }
-            BattleStatus::Defeat => {
-                *vis = Visibility::Visible;
-                *border = BorderColor::all(Color::srgb(0.92, 0.28, 0.24));
-                for mut bt in &mut banner_text_q {
-                    bt.0 = "ПОРАЖЕНИЕ! Ваш танк подбит • [Tab] — вернуться в ангар".to_string();
+            HudPanel::FireAlert => {
+                let on_fire = mods_opt.is_some_and(|m| m.fire_timer > 0.0);
+                *vis = if show_hp_panel && on_fire {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                };
+            }
+            HudPanel::ModuleBox(kind) => {
+                if let Some(mods) = mods_opt {
+                    let st = mods.state(kind);
+                    if let Some(mut bg) = bg_opt {
+                        bg.0 = match st {
+                            ModuleState::Intact => Color::srgba(0.08, 0.16, 0.10, 0.85),
+                            ModuleState::Damaged => Color::srgba(0.24, 0.18, 0.04, 0.90),
+                            ModuleState::Destroyed => Color::srgba(0.28, 0.06, 0.06, 0.92),
+                        };
+                    }
+                    if let Some(mut border) = border_opt {
+                        *border = match st {
+                            ModuleState::Intact => BorderColor::all(Color::srgb(0.26, 0.56, 0.30)),
+                            ModuleState::Damaged => BorderColor::all(Color::srgb(0.95, 0.72, 0.16)),
+                            ModuleState::Destroyed => BorderColor::all(Color::srgb(0.95, 0.25, 0.22)),
+                        };
+                    }
                 }
             }
-        }
-    }
-
-    // 2D-маркеры над врагами.
-    for (slot, mut node, mut vis) in &mut marker_nodes {
-        let Some(&(epos, ec)) = alive_enemies.get(slot.0) else {
-            *vis = Visibility::Hidden;
-            continue;
-        };
-        let Some((cam, cam_gt, _)) = cam_opt else {
-            *vis = Visibility::Hidden;
-            continue;
-        };
-        if let Ok(vp) = cam.world_to_viewport(cam_gt, epos + Vec3::Y * 2.9) {
-            node.left = Val::Px((vp.x - 52.0).max(4.0));
-            node.top = Val::Px((vp.y - 26.0).max(4.0));
-            *vis = Visibility::Visible;
-            let dist = player_pos.map_or(0.0, |p| p.distance(epos));
-            let left = ec.prototype_max_hits.saturating_sub(ec.prototype_hits);
-            for (tslot, mut txt) in &mut marker_texts {
-                if tslot.0 == slot.0 {
-                    txt.0 = format!("▼ {} [{}/{}] {:.0}м", ec.tank_name, left, ec.prototype_max_hits, dist);
+            HudPanel::BattleBanner => match *status {
+                BattleStatus::Ongoing => *vis = Visibility::Hidden,
+                BattleStatus::Victory => {
+                    *vis = Visibility::Visible;
+                    if let Some(mut border) = border_opt {
+                        *border = BorderColor::all(Color::srgb(0.35, 0.88, 0.40));
+                    }
+                }
+                BattleStatus::Defeat => {
+                    *vis = Visibility::Visible;
+                    if let Some(mut border) = border_opt {
+                        *border = BorderColor::all(Color::srgb(0.92, 0.28, 0.24));
+                    }
+                }
+            },
+            HudPanel::EnemyMarker(idx) => {
+                let Some(&(epos, _, _)) = alive_enemies.get(idx) else {
+                    *vis = Visibility::Hidden;
+                    continue;
+                };
+                let Some((cam, cam_gt, _)) = cam_opt else {
+                    *vis = Visibility::Hidden;
+                    continue;
+                };
+                if let Ok(vp) = cam.world_to_viewport(cam_gt, epos + Vec3::Y * 2.9) {
+                    node.left = Val::Px((vp.x - 56.0).max(4.0));
+                    node.top = Val::Px((vp.y - 26.0).max(4.0));
+                    *vis = Visibility::Visible;
+                } else {
+                    *vis = Visibility::Hidden;
                 }
             }
-        } else {
-            *vis = Visibility::Hidden;
         }
     }
 }

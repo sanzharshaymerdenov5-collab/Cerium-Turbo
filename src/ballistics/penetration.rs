@@ -16,6 +16,12 @@ pub fn penetration_at(spec: &ShellSpec, dist_m: f32) -> f32 {
     (spec.pen_at_100m_mm - spec.pen_drop_per_100m_mm * (dist_m - 100.0) / 100.0).max(0.0)
 }
 
+/// Эффективная приведённая толщина брони с учётом угла и нормализации AP-снаряда, мм.
+pub fn effective_armor_mm(spec: &ShellSpec, armor_mm: f32, impact_angle_deg: f32) -> f32 {
+    let eff_angle = (impact_angle_deg - spec.normalization_deg).max(0.0);
+    armor_mm / eff_angle.to_radians().cos().max(1e-3)
+}
+
 /// Оценка попадания.
 /// `impact_angle_deg` — угол между траекторией и нормалью плиты (0° = по нормали).
 pub fn evaluate_impact(
@@ -27,8 +33,7 @@ pub fn evaluate_impact(
     if impact_angle_deg > spec.ricochet_deg {
         return ImpactOutcome::Ricochet;
     }
-    let eff_angle = (impact_angle_deg - spec.normalization_deg).max(0.0);
-    let effective_mm = armor_mm / eff_angle.to_radians().cos().max(1e-3);
+    let effective_mm = effective_armor_mm(spec, armor_mm, impact_angle_deg);
     if penetration_at(spec, dist_m) >= effective_mm {
         ImpactOutcome::Penetration { effective_mm }
     } else {

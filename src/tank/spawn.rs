@@ -7,6 +7,7 @@ use super::armor::{TankCombat, spawn_tank_armor_plates};
 use super::builder::{build_tank_parts_for_team, TankVoxelParts};
 use super::spec::{TankSpec, VoxelVisualSource};
 use crate::core::{GameState, Team};
+use crate::damage::{TankHealth, TankModules};
 use crate::voxel::{VoxelAssets, voxel_model_bundle, vox_loader::load_vox};
 
 /// Целевая мировая точка наведения орудия (для игрока и ИИ).
@@ -185,6 +186,8 @@ pub fn spawn_tank(
         .id();
 
     let combat = TankCombat::new(team, spec.name.clone());
+    let health = TankHealth::new(spec.max_hp);
+    let modules = TankModules::for_spec(&spec);
     commands.entity(root).insert((
         TankRoot {
             entity: root,
@@ -194,6 +197,8 @@ pub fn spawn_tank(
         },
         team,
         combat,
+        health,
+        modules,
         AimCommand {
             world_point: initial_aim,
         },

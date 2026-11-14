@@ -64,23 +64,26 @@ pub fn setup_hangar(
         DespawnOnExit(GameState::Hangar),
     ));
 
+    let damage_mode = crate::core::DamageRulesMode::ArcadeHpAndModules;
     // UI ангара.
     let info = format!(
-        "ТАНК: {} ({})\n\
+        "ТАНК: {} ({})  |  Прочность: {:.0} HP\n\
          Масса: {:.0} т  |  Мощность: {:.0} кВт\n\
          Скорость: +{:.0} / -{:.0} км/ч\n\
-         Орудие: {:.0} мм  |  Перезарядка: {:.1} с\n\
+         Орудие: {:.0} мм  |  Урон AP: {:.0} HP  |  Перезарядка: {:.1} с\n\
          УВН: -{:.0}° .. +{:.0}°  |  Башня: {:.0}°/с\n\
          Снаряд: ТОЛЬКО сплошной AP ({:.0} м/с)\n\
          Пробитие (100 м, 0°): {:.0} мм  |  Рикошет: >{:.0}°\n\
-         Карта: Полигон ({})",
+         Режим урона: {}  |  Карта: Полигон ({})",
         spec.name,
         spec.nation,
+        spec.max_hp,
         spec.mass_kg / 1000.0,
         spec.engine_power_kw,
         spec.max_speed_kmh,
         spec.reverse_speed_kmh,
         spec.shell.caliber_mm,
+        spec.shell.arcade_damage,
         spec.reload_s,
         spec.gun_depression_deg,
         spec.gun_elevation_deg,
@@ -88,6 +91,7 @@ pub fn setup_hangar(
         spec.shell.muzzle_velocity,
         spec.shell.pen_at_100m_mm,
         spec.shell.ricochet_deg,
+        damage_mode.ru_label(),
         selected_map.0,
     );
 
@@ -118,7 +122,7 @@ pub fn setup_hangar(
             .with_children(|p| {
                 p.spawn((
                     Text::new(
-                        "CERIUM-TURBO  •  ЭТАП 2: БОЙ С ИИ-ВРАГАМИ (только сплошной AP)",
+                        "CERIUM-TURBO  •  ЭТАП 3: ОБЩЕЕ ХП И МОДУЛИ WoT (только сплошной AP)",
                     ),
                     TextFont::from_font_size(20.0),
                     TextColor(Color::srgb(0.92, 0.95, 0.88)),

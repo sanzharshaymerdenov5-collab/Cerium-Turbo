@@ -33,12 +33,22 @@ pub enum BattleStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Resource)]
 pub enum DamageRulesMode {
     /// Этапы 1–2: пробития/рикошеты фиксируются по счётчику попаданий.
-    #[default]
     PrototypeTargets,
     /// Этапы 3–5: общее ХП + ХП модулей (стиль WoT).
+    #[default]
     ArcadeHpAndModules,
     /// Этап 6: только модули и экипаж (стиль War Thunder).
     ModulesOnlyWt,
+}
+
+impl DamageRulesMode {
+    pub fn ru_label(self) -> &'static str {
+        match self {
+            Self::PrototypeTargets => "Прототип",
+            Self::ArcadeHpAndModules => "WoT (ХП + Модули)",
+            Self::ModulesOnlyWt => "War Thunder (Только модули)",
+        }
+    }
 }
 
 /// Идентификатор танка (имя `.ron`-файла без расширения).
