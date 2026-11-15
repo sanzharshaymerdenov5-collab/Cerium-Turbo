@@ -344,7 +344,8 @@ mod tests {
         let mut combat = TankCombat::new(Team::Player, "Т-34-85".into());
 
         // Критический урон двигателю -> Damaged (-45% скорости).
-        mods.get_mut(ModuleKind::Engine).unwrap().apply_damage(100.0);
+        let eng_dmg = mods.get_mut(ModuleKind::Engine).unwrap().max_hp * 0.55;
+        mods.get_mut(ModuleKind::Engine).unwrap().apply_damage(eng_dmg);
         mods.apply_penalties_to_combat(&mut combat);
         assert!(!combat.immobilized);
         assert!((combat.speed_mult - 0.55).abs() < 1e-3);
@@ -356,7 +357,8 @@ mod tests {
         assert_eq!(combat.speed_mult, 0.0);
 
         // Повреждённая боеукладка -> перезарядка x2.
-        mods.get_mut(ModuleKind::AmmoRack).unwrap().apply_damage(90.0);
+        let ammo_dmg = mods.get_mut(ModuleKind::AmmoRack).unwrap().max_hp * 0.55;
+        mods.get_mut(ModuleKind::AmmoRack).unwrap().apply_damage(ammo_dmg);
         mods.apply_penalties_to_combat(&mut combat);
         assert_eq!(mods.state(ModuleKind::AmmoRack), ModuleState::Damaged);
         assert!((combat.reload_mult - 2.0).abs() < 1e-3);

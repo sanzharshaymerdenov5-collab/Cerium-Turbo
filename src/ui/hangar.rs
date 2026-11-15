@@ -1,8 +1,8 @@
-//! Ангар в стиле World of Tanks (Обновление 1.4.2):
+//! Ангар в стиле World of Tanks (Обновление 1.5):
 //! - Промышленный 3D-цех со смотровой ямой, рельсами, кран-балкой, трубами, прожекторами и дымкой;
-//! - Экономика (серебро/опыт, награды за бой), дерево исследований 3 наций (СССР, Германия, США)
-//!   × V тиров с альтернативными ветками (18 исторических машин AP-Only);
-//! - Фильтры карусели по нациям и технике в ангаре, предпросмотр любой машины в 3D и X-Ray `[V]`,
+//! - Экономика (серебро/опыт, награды за бой), горизонтальное дерево исследований слева направо
+//!   (СССР I–VII, Германия I–VI, США I–VII — 30 исторических машин SolidAP) с выбором нации сбоку;
+//! - Балансировщик ±1 ур., фильтры карусели по нациям и технике в ангаре, предпросмотр любой машины в 3D и X-Ray `[V]`,
 //!   переключение режимов `[M]`, выбор случайной карты `+10%` (без Полигона) и 10 локаций 5v5.
 
 #![allow(deprecated)]
@@ -19,7 +19,8 @@ use crate::ballistics::penetration::{effective_armor_mm, penetration_at};
 use crate::core::{DamageRulesMode, GameState, SelectedMap, SelectedTank, TankId};
 use crate::damage::{CrewRole, ModuleKind, TankCrew, TankModules};
 use crate::maps::{
-    MapBiome, MapSpec, RANDOM_MAP_ID, available_maps, load_map_spec, random_map_pool,
+    ActiveBattleLineup, MapBiome, MapSpec, RANDOM_MAP_ID, available_maps, load_map_spec,
+    random_map_pool,
 };
 use crate::progression::{
     LastBattleReward, PlayerProgression, buy_tank, ensure_starters, has_prerequisite_researched,
@@ -51,6 +52,7 @@ pub struct HangarViewState {
     pub spawned_preview_id: String,
     pub filter_tab: HangarFilter,
     pub show_tech_tree: bool,
+    pub tech_tree_nation: Nation,
     pub notice: Option<(String, Color)>,
     pub prev_xray_btn: bool,
     pub prev_mode_btn: bool,
@@ -73,6 +75,7 @@ impl Default for HangarViewState {
             spawned_preview_id: String::new(),
             filter_tab: HangarFilter::AllOwned,
             show_tech_tree: false,
+            tech_tree_nation: Nation::Ussr,
             notice: None,
             prev_xray_btn: false,
             prev_mode_btn: false,
@@ -100,6 +103,7 @@ pub struct HangarUiRoot;
 pub enum HangarButton {
     Noop,
     SelectFilter(HangarFilter),
+    SelectTechTreeNation(Nation),
     SelectTank(usize),
     InspectTank(usize),
     SelectOwnedAndClose(usize),
@@ -165,7 +169,16 @@ pub fn tier_roman(tier: u8) -> &'static str {
         3 => "III",
         4 => "IV",
         5 => "V",
+        6 => "VI",
+        7 => "VII",
         _ => "I",
+    }
+}
+
+fn nation_tier_span(nation: Nation) -> &'static str {
+    match nation {
+        Nation::Germany => "I–VI",
+        Nation::Ussr | Nation::Usa => "I–VII",
     }
 }
 
@@ -188,15 +201,15 @@ pub fn tank_wot_meta(spec: &TankSpec) -> TankWotMeta {
 pub fn compute_tank_ratings(spec: &TankSpec) -> TankRatings {
     let pen = penetration_at(&spec.shell, 100.0);
     let dpm_proxy = (spec.shell.arcade_damage / spec.reload_s.max(1.0)) * 2.1;
-    let firepower = ((pen * 0.56 + dpm_proxy * 0.62) / 210.0).clamp(0.14, 0.98);
-    let survivability = (spec.max_hp / 1620.0).clamp(0.16, 0.98);
+    let firepower = ((pen * 0.56 + dpm_proxy * 0.62) / 225.0).clamp(0.14, 0.98);
+    let survivability = (spec.max_hp / 2150.0).clamp(0.14, 0.98);
 
     let eff_vld = effective_armor_mm(
         &spec.shell,
         spec.armor.hull_front_upper_mm,
         spec.armor.vld_slope_deg,
     );
-    let armor = ((eff_vld * 0.55 + spec.armor.turret_front_mm * 0.65) / 260.0).clamp(0.12, 0.98);
+    let armor = ((eff_vld * 0.55 + spec.armor.turret_front_mm * 0.65) / 315.0).clamp(0.12, 0.98);
 
     let hp_per_t = spec.engine_power_kw / (spec.mass_kg / 1000.0).max(1.0);
     let mobility =
@@ -232,52 +245,29 @@ fn biome_accent(biome: MapBiome) -> Color {
     }
 }
 
-fn resolve_tank_name(id: Option<&str>, tanks: &[TankSpec]) -> String {
-    match id {
-        Some(tid) => tanks
-            .iter()
-            .find(|t| t.id == tid)
-            .map(|t| t.name.clone())
-            .unwrap_or_else(|| tid.to_string()),
-        None => "Танк ИИ".to_string(),
-    }
-}
-
-fn teams_lineup_ru(map_spec: &MapSpec, tanks: &[TankSpec]) -> String {
-    let allies: Vec<String> = map_spec
-        .ally_spawns
-        .iter()
-        .map(|s| resolve_tank_name(s.tank_id.as_deref(), tanks))
-        .collect();
-    let enemies: Vec<String> = map_spec
-        .enemy_spawns
-        .iter()
-        .map(|s| resolve_tank_name(s.tank_id.as_deref(), tanks))
-        .collect();
-    let ally_str = if allies.is_empty() {
-        "Союз (Вы): одиночный выезд".to_string()
-    } else {
-        format!("Союзники ({}): {}", allies.len(), allies.join(", "))
-    };
-    let enemy_str = if enemies.is_empty() {
-        "Противник: мишени полигона".to_string()
-    } else {
-        format!("Противник ({}): {}", enemies.len(), enemies.join(", "))
-    };
-    format!("{ally_str}\n{enemy_str}")
+fn matchmaker_band_ru(combat_spec: &TankSpec) -> String {
+    let (min_t, max_t) = ActiveBattleLineup::tier_window(combat_spec.tier);
+    format!(
+        "Балансировщик ±1 ур.: бойцы {}–{} ур. (под {} {} ур.)",
+        tier_roman(min_t),
+        tier_roman(max_t),
+        combat_spec.name,
+        tier_roman(combat_spec.tier)
+    )
 }
 
 fn map_brief_text(
     selected_map_id: &str,
     maps: &[MapSpec],
-    tanks: &[TankSpec],
+    combat_spec: &TankSpec,
 ) -> (String, String, Color) {
+    let mm_line = matchmaker_band_ru(combat_spec);
     if selected_map_id == RANDOM_MAP_ID {
         let pool_count = random_map_pool().len();
         return (
             "Случайная карта  •  5v5 Автовыбор".to_string(),
             format!(
-                "Перед началом боя 5v5 выбирается случайная боевая локация ({pool_count} карт, без Полигона).\nБонус случайной карты: +10% серебра и опыта"
+                "Перед началом боя 5v5 выбирается случайная боевая локация ({pool_count} карт, без Полигона).\n{mm_line}\nБонус случайной карты: +10% серебра и опыта"
             ),
             Color::srgb(0.95, 0.76, 0.36),
         );
@@ -289,9 +279,17 @@ fn map_brief_text(
         .or_else(|| load_map_spec("proving_grounds"))
         .or_else(|| maps.first().cloned())
         .expect("default map");
+    let enemy_note = if map_spec.targets.is_empty() {
+        format!("Режим: 5v5 • 4 союзника и 5 противников\n{mm_line}")
+    } else {
+        format!(
+            "Цели: {} мишеней полигона + 5v5 спарринг\n{mm_line}",
+            map_spec.targets.len()
+        )
+    };
     (
         format!("{}  •  {} (5v5)", map_spec.name, biome_short_ru(map_spec.biome)),
-        format!("{}\n{}", map_spec.description, teams_lineup_ru(&map_spec, tanks)),
+        format!("{}\n{}", map_spec.description, enemy_note),
         biome_accent(map_spec.biome),
     )
 }
@@ -869,6 +867,352 @@ fn prerequisite_label_ru(spec: &TankSpec, all_tanks: &[TankSpec]) -> String {
     }
 }
 
+#[derive(Component)]
+pub struct TechTreeModalPanel;
+
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TechTreeColumn {
+    pub nation: Nation,
+    pub tier: u8,
+}
+
+const TREE_TRACK_HEIGHT_PX: f32 = 264.0;
+const TREE_CARD_HEIGHT_PX: f32 = 118.0;
+const TREE_BOTTOM_SLOT_TOP_PX: f32 = 146.0;
+const TREE_MID_SLOT_TOP_PX: f32 = 73.0;
+
+fn order_tier_column<'a>(
+    mut row: Vec<(usize, &'a TankSpec)>,
+    prev_ids: &[String],
+) -> Vec<(usize, &'a TankSpec)> {
+    if row.len() == 2 && prev_ids.len() == 2 {
+        let top_id = &prev_ids[0];
+        let bot_id = &prev_ids[1];
+        let rank = |spec: &TankSpec| -> usize {
+            if spec.prerequisite.as_deref() == Some(top_id.as_str()) {
+                0
+            } else if spec.prerequisite.as_deref() == Some(bot_id.as_str()) {
+                1
+            } else {
+                2
+            }
+        };
+        row.sort_by_key(|(_, spec)| rank(spec));
+    }
+    row
+}
+
+fn spawn_tree_connector(
+    parent: &mut ChildSpawnerCommands,
+    prev_count: usize,
+    cur_count: usize,
+    accent: Color,
+) {
+    let line_col = Color::srgba(0.52, 0.64, 0.78, 0.88);
+    parent
+        .spawn(Node {
+            width: Val::Px(14.0),
+            height: Val::Px(TREE_TRACK_HEIGHT_PX),
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_children(|strip| {
+            let mut seg = |left: f32, top: f32, width: f32, height: f32, col: Color| {
+                strip.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(left),
+                        top: Val::Px(top),
+                        width: Val::Px(width),
+                        height: Val::Px(height),
+                        ..default()
+                    },
+                    BackgroundColor(col),
+                ));
+            };
+
+            let y_top = 58.0;
+            let y_mid = 131.0;
+            let y_bot = 204.0;
+            match (prev_count, cur_count) {
+                (1, 1) => {
+                    seg(0.0, y_mid, 14.0, 2.0, line_col);
+                }
+                (1, 2) => {
+                    seg(0.0, y_mid, 7.0, 2.0, line_col);
+                    seg(6.0, y_top, 2.0, y_bot - y_top + 2.0, line_col);
+                    seg(6.0, y_top, 8.0, 2.0, accent);
+                    seg(6.0, y_bot, 8.0, 2.0, line_col);
+                }
+                (2, 1) => {
+                    seg(0.0, y_top, 8.0, 2.0, line_col);
+                    seg(0.0, y_bot, 8.0, 2.0, line_col);
+                    seg(6.0, y_top, 2.0, y_bot - y_top + 2.0, line_col);
+                    seg(6.0, y_mid, 8.0, 2.0, accent);
+                }
+                (2, 2) => {
+                    seg(0.0, y_top, 14.0, 2.0, accent);
+                    seg(0.0, y_bot, 14.0, 2.0, line_col);
+                }
+                _ => {
+                    seg(0.0, y_mid, 14.0, 2.0, line_col);
+                }
+            }
+        });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_tech_tree_card(
+    slot: &mut ChildSpawnerCommands,
+    top_px: f32,
+    g_idx: usize,
+    t: &TankSpec,
+    all_tanks: &[TankSpec],
+    prog: &PlayerProgression,
+    selected_tank: &SelectedTank,
+    view: &HangarViewState,
+) {
+    let owned = is_owned(prog, &t.id);
+    let researched = is_researched(prog, &t.id);
+    let is_combat = t.id == selected_tank.0.0;
+    let is_preview = t.id == view.preview_tank_id;
+    let prereq_met = has_prerequisite_researched(prog, t);
+    let tm = tank_wot_meta(t);
+    let pen = penetration_at(&t.shell, 100.0);
+
+    let (badge, badge_col, card_bg, card_border) = if owned {
+        (
+            if is_combat { "В БОЮ" } else { "АНГАР" },
+            Color::srgb(0.45, 0.94, 0.54),
+            Color::srgba(0.09, 0.18, 0.12, 0.94),
+            if is_combat {
+                Color::srgb(0.96, 0.68, 0.22)
+            } else {
+                Color::srgb(0.32, 0.74, 0.42)
+            },
+        )
+    } else if researched {
+        (
+            "ОТКР.",
+            Color::srgb(0.98, 0.82, 0.36),
+            Color::srgba(0.16, 0.14, 0.08, 0.94),
+            Color::srgb(0.86, 0.68, 0.28),
+        )
+    } else if prereq_met {
+        (
+            "ДОСТ.",
+            Color::srgb(0.54, 0.86, 1.0),
+            Color::srgba(0.08, 0.13, 0.20, 0.94),
+            Color::srgb(0.36, 0.64, 0.92),
+        )
+    } else {
+        (
+            "ЗАКР.",
+            Color::srgb(0.56, 0.62, 0.70),
+            Color::srgba(0.05, 0.06, 0.08, 0.88),
+            Color::srgba(0.24, 0.28, 0.34, 0.8),
+        )
+    };
+
+    slot.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            top: Val::Px(top_px),
+            width: Val::Percent(100.0),
+            height: Val::Px(TREE_CARD_HEIGHT_PX),
+            flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::SpaceBetween,
+            padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
+            border: UiRect::all(Val::Px(if is_preview { 2.0 } else { 1.0 })),
+            border_radius: BorderRadius::all(Val::Px(4.0)),
+            row_gap: Val::Px(2.0),
+            ..default()
+        },
+        BackgroundColor(card_bg),
+        BorderColor::all(card_border),
+    ))
+    .with_children(|card| {
+        card.spawn(Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(2.0),
+            ..default()
+        })
+        .with_children(|top_grp| {
+            top_grp
+                .spawn(Node {
+                    width: Val::Percent(100.0),
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(3.0),
+                    ..default()
+                })
+                .with_children(|r1| {
+                    r1.spawn((
+                        Node {
+                            flex_shrink: 1.0,
+                            ..default()
+                        },
+                        Text::new(format!("{} {} {}", tm.tier, tm.class_icon, t.name)),
+                        TextFont::from_font_size(9.5),
+                        TextColor(if owned || researched || prereq_met {
+                            Color::srgb(0.96, 0.97, 0.99)
+                        } else {
+                            Color::srgb(0.62, 0.67, 0.74)
+                        }),
+                    ));
+                    r1.spawn((
+                        Text::new(badge),
+                        TextFont::from_font_size(8.2),
+                        TextColor(badge_col),
+                    ));
+                });
+
+            top_grp.spawn((
+                Text::new(format!("{} • {:.0}мм", tm.gun_short, pen)),
+                TextFont::from_font_size(9.2),
+                TextColor(Color::srgb(0.74, 0.82, 0.90)),
+            ));
+
+            top_grp.spawn((
+                Text::new(format!("{:.0} HP • КД {:.1}с", t.max_hp, t.reload_s)),
+                TextFont::from_font_size(8.8),
+                TextColor(Color::srgb(0.60, 0.68, 0.76)),
+            ));
+        });
+
+        card.spawn(Node {
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(3.0),
+            ..default()
+        })
+        .with_children(|actions| {
+            actions
+                .spawn((
+                    Interaction::default(),
+                    HangarButton::InspectTank(g_idx),
+                    Node {
+                        padding: UiRect::axes(Val::Px(5.0), Val::Px(2.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(3.0)),
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.10, 0.15, 0.22, 0.92)),
+                    BorderColor::all(Color::srgb(0.38, 0.52, 0.68)),
+                ))
+                .with_children(|b| {
+                    b.spawn((
+                        Text::new("3D"),
+                        TextFont::from_font_size(9.0),
+                        TextColor(Color::srgb(0.86, 0.92, 0.98)),
+                    ));
+                });
+
+            if owned {
+                actions
+                    .spawn((
+                        Interaction::default(),
+                        HangarButton::SelectOwnedAndClose(g_idx),
+                        Node {
+                            padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(3.0)),
+                            ..default()
+                        },
+                        BackgroundColor(if is_combat {
+                            Color::srgb(0.18, 0.36, 0.20)
+                        } else {
+                            Color::srgb(0.14, 0.26, 0.16)
+                        }),
+                        BorderColor::all(Color::srgb(0.44, 0.86, 0.48)),
+                    ))
+                    .with_children(|b| {
+                        b.spawn((
+                            Text::new(if is_combat { "В бою" } else { "В бой" }),
+                            TextFont::from_font_size(9.5),
+                            TextColor(Color::srgb(0.90, 0.98, 0.90)),
+                        ));
+                    });
+            } else if researched {
+                let can_afford = prog.credits >= t.credit_cost as u64;
+                actions
+                    .spawn((
+                        Interaction::default(),
+                        HangarButton::BuyTank(g_idx),
+                        Node {
+                            padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(3.0)),
+                            ..default()
+                        },
+                        BackgroundColor(if can_afford {
+                            Color::srgb(0.46, 0.28, 0.08)
+                        } else {
+                            Color::srgba(0.24, 0.12, 0.10, 0.92)
+                        }),
+                        BorderColor::all(if can_afford {
+                            Color::srgb(0.96, 0.72, 0.24)
+                        } else {
+                            Color::srgb(0.62, 0.34, 0.28)
+                        }),
+                    ))
+                    .with_children(|b| {
+                        b.spawn((
+                            Text::new(format!("Куп:{}с", t.credit_cost)),
+                            TextFont::from_font_size(9.0),
+                            TextColor(Color::srgb(1.0, 0.92, 0.72)),
+                        ));
+                    });
+            } else if prereq_met {
+                let can_xp = prog.xp >= t.xp_cost as u64;
+                actions
+                    .spawn((
+                        Interaction::default(),
+                        HangarButton::ResearchTank(g_idx),
+                        Node {
+                            padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(3.0)),
+                            ..default()
+                        },
+                        BackgroundColor(if can_xp {
+                            Color::srgb(0.12, 0.28, 0.44)
+                        } else {
+                            Color::srgba(0.16, 0.12, 0.18, 0.90)
+                        }),
+                        BorderColor::all(if can_xp {
+                            Color::srgb(0.44, 0.80, 1.0)
+                        } else {
+                            Color::srgb(0.46, 0.42, 0.56)
+                        }),
+                    ))
+                    .with_children(|b| {
+                        b.spawn((
+                            Text::new(format!("Откр:{}о", t.xp_cost)),
+                            TextFont::from_font_size(9.0),
+                            TextColor(Color::srgb(0.86, 0.96, 1.0)),
+                        ));
+                    });
+            } else {
+                let prereq_name = prerequisite_label_ru(t, all_tanks);
+                actions.spawn((
+                    Node {
+                        flex_shrink: 1.0,
+                        ..default()
+                    },
+                    Text::new(format!("Нужен {prereq_name}")),
+                    TextFont::from_font_size(8.2),
+                    TextColor(Color::srgb(0.56, 0.60, 0.68)),
+                ));
+            }
+        });
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_tech_tree_modal(
     root: &mut ChildSpawnerCommands,
@@ -877,6 +1221,19 @@ fn spawn_tech_tree_modal(
     selected_tank: &SelectedTank,
     view: &HangarViewState,
 ) {
+    let active_nation = view.tech_tree_nation;
+    let accent = active_nation.accent();
+    let max_tier = all_tanks
+        .iter()
+        .filter(|t| t.nation_id == active_nation)
+        .map(|t| t.tier)
+        .max()
+        .unwrap_or(7);
+    let nation_count = all_tanks
+        .iter()
+        .filter(|t| t.nation_id == active_nation)
+        .count();
+
     root.spawn((
         Node {
             position_type: PositionType::Absolute,
@@ -905,13 +1262,14 @@ fn spawn_tech_tree_modal(
             BackgroundColor(Color::srgba(0.01, 0.015, 0.025, 0.78)),
         ));
 
-        // Основное окно дерева исследований.
+        // Основное окно горизонтального дерева исследований.
         overlay
             .spawn((
+                TechTreeModalPanel,
                 Node {
-                    width: Val::Percent(96.0),
-                    max_width: Val::Px(1260.0),
-                    padding: UiRect::all(Val::Px(12.0)),
+                    width: Val::Percent(97.0),
+                    max_width: Val::Px(1250.0),
+                    padding: UiRect::all(Val::Px(10.0)),
                     border: UiRect::all(Val::Px(1.5)),
                     border_radius: BorderRadius::all(Val::Px(6.0)),
                     flex_direction: FlexDirection::Column,
@@ -939,7 +1297,7 @@ fn spawn_tech_tree_modal(
                     ))
                     .with_children(|mh| {
                         mh.spawn((
-                            Text::new("ДЕРЕВО ИССЛЕДОВАНИЙ (3 НАЦИИ × V ТИРОВ • 18 МАШИН SOLID-AP)"),
+                            Text::new("ДЕРЕВО ИССЛЕДОВАНИЙ (3 НАЦИИ • 30 МАШИН SOLID-AP)"),
                             TextFont::from_font_size(14.0),
                             TextColor(Color::srgb(0.96, 0.86, 0.56)),
                         ));
@@ -990,491 +1348,280 @@ fn spawn_tech_tree_modal(
                         });
                     });
 
-                // 3 колонки наций (СССР, Германия, США) с параллельными альтернативными ветками на одном ранге.
+                // Основная часть: слева вертикальный выбор наций, справа горизонтальная ветка I..VII.
                 modal
                     .spawn(Node {
                         width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Row,
                         column_gap: Val::Px(10.0),
                         align_items: AlignItems::Stretch,
                         ..default()
                     })
-                    .with_children(|cols| {
-                        for nation in Nation::all() {
-                            let accent = nation.accent();
-                            cols.spawn((
-                                Node {
-                                    flex_grow: 1.0,
-                                    flex_basis: Val::Px(0.0),
-                                    flex_direction: FlexDirection::Column,
-                                    padding: UiRect::all(Val::Px(8.0)),
-                                    border: UiRect {
-                                        top: Val::Px(3.0),
-                                        left: Val::Px(1.0),
-                                        right: Val::Px(1.0),
-                                        bottom: Val::Px(1.0),
-                                    },
-                                    border_radius: BorderRadius::all(Val::Px(4.0)),
-                                    row_gap: Val::Px(3.0),
-                                    ..default()
-                                },
-                                BackgroundColor(Color::srgba(0.04, 0.056, 0.08, 0.92)),
-                                BorderColor::all(accent),
-                            ))
-                            .with_children(|col| {
-                                col.spawn((
-                                    Text::new(format!("{}  (I -> V)", nation.ru_name())),
-                                    TextFont::from_font_size(13.0),
-                                    TextColor(Color::srgb(0.95, 0.96, 0.98)),
-                                ));
-
-                                let branch: Vec<(usize, &TankSpec)> = all_tanks
+                    .with_children(|body| {
+                        // Левая панель переключения наций (3 равных по высоте прямоугольника).
+                        body.spawn((
+                            Node {
+                                width: Val::Px(112.0),
+                                flex_shrink: 0.0,
+                                flex_direction: FlexDirection::Column,
+                                row_gap: Val::Px(6.0),
+                                ..default()
+                            },
+                        ))
+                        .with_children(|sidebar| {
+                            for nation in Nation::all() {
+                                let is_sel = nation == active_nation;
+                                let n_count =
+                                    all_tanks.iter().filter(|t| t.nation_id == nation).count();
+                                let n_owned = all_tanks
                                     .iter()
-                                    .enumerate()
-                                    .filter(|(_, t)| t.nation_id == nation)
-                                    .collect();
-
-                                let mut prev_count = 0usize;
-                                for tier in 1..=5u8 {
-                                    let row_tanks: Vec<(usize, &TankSpec)> = branch
-                                        .iter()
-                                        .copied()
-                                        .filter(|(_, t)| t.tier == tier)
-                                        .collect();
-                                    if row_tanks.is_empty() {
-                                        continue;
-                                    }
-
-                                    if prev_count > 0 {
-                                        let connector = match (prev_count, row_tanks.len()) {
-                                            (1, 2) => "↙   ↘",
-                                            (2, 2) => "↓   ↓",
-                                            (2, 1) => "↘   ↙",
-                                            _ => "↓",
-                                        };
-                                        col.spawn((
-                                            Node {
-                                                align_self: AlignSelf::Center,
-                                                ..default()
+                                    .filter(|t| t.nation_id == nation && is_owned(prog, &t.id))
+                                    .count();
+                                let n_acc = nation.accent();
+                                sidebar
+                                    .spawn((
+                                        Interaction::default(),
+                                        HangarButton::SelectTechTreeNation(nation),
+                                        Node {
+                                            flex_grow: 1.0,
+                                            flex_basis: Val::Px(0.0),
+                                            width: Val::Percent(100.0),
+                                            flex_direction: FlexDirection::Column,
+                                            justify_content: JustifyContent::Center,
+                                            align_items: AlignItems::Center,
+                                            row_gap: Val::Px(4.0),
+                                            padding: UiRect::axes(Val::Px(6.0), Val::Px(8.0)),
+                                            border: UiRect {
+                                                left: Val::Px(if is_sel { 4.0 } else { 1.5 }),
+                                                top: Val::Px(if is_sel { 1.5 } else { 1.0 }),
+                                                right: Val::Px(if is_sel { 1.5 } else { 1.0 }),
+                                                bottom: Val::Px(if is_sel { 1.5 } else { 1.0 }),
                                             },
-                                            Text::new(connector),
-                                            TextFont::from_font_size(10.5),
-                                            TextColor(Color::srgb(0.55, 0.65, 0.78)),
-                                        ));
-                                    }
-                                    prev_count = row_tanks.len();
-                                    let is_split = row_tanks.len() > 1;
-
-                                    col.spawn(Node {
-                                        width: Val::Percent(100.0),
-                                        flex_direction: FlexDirection::Row,
-                                        column_gap: Val::Px(6.0),
-                                        align_items: AlignItems::Stretch,
-                                        ..default()
-                                    })
-                                    .with_children(|tier_row| {
-                                        for &(g_idx, t) in &row_tanks {
-                                            let owned = is_owned(prog, &t.id);
-                                            let researched = is_researched(prog, &t.id);
-                                            let is_combat = t.id == selected_tank.0.0;
-                                            let is_preview = t.id == view.preview_tank_id;
-                                            let prereq_met = has_prerequisite_researched(prog, t);
-                                            let tm = tank_wot_meta(t);
-                                            let pen = penetration_at(&t.shell, 100.0);
-
-                                            let (badge, badge_col, card_bg, card_border) = if owned {
-                                                (
-                                                    if is_combat {
-                                                        "В БОЮ"
-                                                    } else if is_split {
-                                                        "АНГАР"
-                                                    } else {
-                                                        "В АНГАРЕ"
-                                                    },
-                                                    Color::srgb(0.45, 0.94, 0.54),
-                                                    Color::srgba(0.09, 0.18, 0.12, 0.94),
-                                                    if is_combat {
-                                                        Color::srgb(0.96, 0.68, 0.22)
-                                                    } else {
-                                                        Color::srgb(0.32, 0.74, 0.42)
-                                                    },
-                                                )
-                                            } else if researched {
-                                                (
-                                                    "ОТКРЫТ",
-                                                    Color::srgb(0.98, 0.82, 0.36),
-                                                    Color::srgba(0.16, 0.14, 0.08, 0.94),
-                                                    Color::srgb(0.86, 0.68, 0.28),
-                                                )
-                                            } else if prereq_met {
-                                                (
-                                                    if is_split { "ДОСТ." } else { "ДОСТУПЕН" },
-                                                    Color::srgb(0.54, 0.86, 1.0),
-                                                    Color::srgba(0.08, 0.13, 0.20, 0.94),
-                                                    Color::srgb(0.36, 0.64, 0.92),
-                                                )
+                                            border_radius: BorderRadius::all(Val::Px(4.0)),
+                                            ..default()
+                                        },
+                                        BackgroundColor(if is_sel {
+                                            Color::srgba(0.11, 0.16, 0.24, 0.98)
+                                        } else {
+                                            Color::srgba(0.045, 0.062, 0.088, 0.92)
+                                        }),
+                                        BorderColor::all(if is_sel {
+                                            n_acc
+                                        } else {
+                                            Color::srgba(0.28, 0.35, 0.44, 0.8)
+                                        }),
+                                    ))
+                                    .with_children(|nb| {
+                                        nb.spawn((
+                                            Text::new(nation.ru_name()),
+                                            TextFont::from_font_size(14.0),
+                                            TextColor(if is_sel {
+                                                Color::srgb(0.98, 0.96, 0.88)
                                             } else {
-                                                (
-                                                    "ЗАКРЫТ",
-                                                    Color::srgb(0.56, 0.62, 0.70),
-                                                    Color::srgba(0.05, 0.06, 0.08, 0.88),
-                                                    Color::srgba(0.24, 0.28, 0.34, 0.8),
-                                                )
-                                            };
-
-                                            tier_row
-                                                .spawn((
-                                                    Node {
-                                                        flex_grow: 1.0,
-                                                        flex_basis: Val::Px(0.0),
-                                                        flex_direction: FlexDirection::Column,
-                                                        padding: UiRect::axes(
-                                                            Val::Px(if is_split { 6.0 } else { 8.0 }),
-                                                            Val::Px(5.0),
-                                                        ),
-                                                        border: UiRect::all(Val::Px(
-                                                            if is_preview { 2.0 } else { 1.0 },
-                                                        )),
-                                                        border_radius: BorderRadius::all(Val::Px(
-                                                            4.0,
-                                                        )),
-                                                        row_gap: Val::Px(3.0),
-                                                        ..default()
-                                                    },
-                                                    BackgroundColor(card_bg),
-                                                    BorderColor::all(card_border),
-                                                ))
-                                                .with_children(|card| {
-                                                    card.spawn(Node {
-                                                        width: Val::Percent(100.0),
-                                                        justify_content:
-                                                            JustifyContent::SpaceBetween,
-                                                        align_items: AlignItems::Center,
-                                                        ..default()
-                                                    })
-                                                    .with_children(|r1| {
-                                                        r1.spawn((
-                                                            Text::new(format!(
-                                                                "{} {} {} {}",
-                                                                tm.tier,
-                                                                tm.class_icon,
-                                                                tm.class_short,
-                                                                t.name
-                                                            )),
-                                                            TextFont::from_font_size(if is_split {
-                                                                11.0
-                                                            } else {
-                                                                12.0
-                                                            }),
-                                                            TextColor(
-                                                                if owned || researched || prereq_met
-                                                                {
-                                                                    Color::srgb(0.96, 0.97, 0.99)
-                                                                } else {
-                                                                    Color::srgb(0.62, 0.67, 0.74)
-                                                                },
-                                                            ),
-                                                        ));
-                                                        r1.spawn((
-                                                            Text::new(badge),
-                                                            TextFont::from_font_size(9.5),
-                                                            TextColor(badge_col),
-                                                        ));
-                                                    });
-
-                                                    card.spawn((
-                                                        Text::new(if is_split {
-                                                            format!(
-                                                                "{} • {:.0}мм • {:.0}HP",
-                                                                tm.gun_short, pen, t.max_hp
-                                                            )
-                                                        } else {
-                                                            format!(
-                                                                "{} • Проб. {:.0}мм • {:.0} HP",
-                                                                tm.gun_short, pen, t.max_hp
-                                                            )
-                                                        }),
-                                                        TextFont::from_font_size(if is_split {
-                                                            9.5
-                                                        } else {
-                                                            10.5
-                                                        }),
-                                                        TextColor(Color::srgb(0.72, 0.80, 0.88)),
-                                                    ));
-
-                                                    // Строка действий (строго соседние кнопки без вложенных Interaction!).
-                                                    card.spawn(Node {
-                                                        width: Val::Percent(100.0),
-                                                        justify_content:
-                                                            JustifyContent::SpaceBetween,
-                                                        align_items: AlignItems::Center,
-                                                        column_gap: Val::Px(4.0),
-                                                        ..default()
-                                                    })
-                                                    .with_children(|actions| {
-                                                        actions
-                                                            .spawn((
-                                                                Interaction::default(),
-                                                                HangarButton::InspectTank(g_idx),
-                                                                Node {
-                                                                    padding: UiRect::axes(
-                                                                        Val::Px(if is_split {
-                                                                            5.0
-                                                                        } else {
-                                                                            7.0
-                                                                        }),
-                                                                        Val::Px(3.0),
-                                                                    ),
-                                                                    border: UiRect::all(Val::Px(
-                                                                        1.0,
-                                                                    )),
-                                                                    border_radius:
-                                                                        BorderRadius::all(Val::Px(
-                                                                            3.0,
-                                                                        )),
-                                                                    ..default()
-                                                                },
-                                                                BackgroundColor(Color::srgba(
-                                                                    0.10, 0.15, 0.22, 0.92,
-                                                                )),
-                                                                BorderColor::all(Color::srgb(
-                                                                    0.38, 0.52, 0.68,
-                                                                )),
-                                                            ))
-                                                            .with_children(|b| {
-                                                                b.spawn((
-                                                                    Text::new(if is_split {
-                                                                        "3D"
-                                                                    } else {
-                                                                        "Осмотр 3D"
-                                                                    }),
-                                                                    TextFont::from_font_size(10.0),
-                                                                    TextColor(Color::srgb(
-                                                                        0.86, 0.92, 0.98,
-                                                                    )),
-                                                                ));
-                                                            });
-
-                                                        if owned {
-                                                            actions
-                                                                .spawn((
-                                                                    Interaction::default(),
-                                                                    HangarButton::SelectOwnedAndClose(
-                                                                        g_idx,
-                                                                    ),
-                                                                    Node {
-                                                                        padding: UiRect::axes(
-                                                                            Val::Px(if is_split {
-                                                                                6.0
-                                                                            } else {
-                                                                                8.0
-                                                                            }),
-                                                                            Val::Px(3.0),
-                                                                        ),
-                                                                        border: UiRect::all(
-                                                                            Val::Px(1.0),
-                                                                        ),
-                                                                        border_radius:
-                                                                            BorderRadius::all(
-                                                                                Val::Px(3.0),
-                                                                            ),
-                                                                        ..default()
-                                                                    },
-                                                                    BackgroundColor(if is_combat {
-                                                                        Color::srgb(
-                                                                            0.18, 0.36, 0.20,
-                                                                        )
-                                                                    } else {
-                                                                        Color::srgb(
-                                                                            0.14, 0.26, 0.16,
-                                                                        )
-                                                                    }),
-                                                                    BorderColor::all(Color::srgb(
-                                                                        0.44, 0.86, 0.48,
-                                                                    )),
-                                                                ))
-                                                                .with_children(|b| {
-                                                                    b.spawn((
-                                                                        Text::new(if is_combat {
-                                                                            if is_split {
-                                                                                "В бою"
-                                                                            } else {
-                                                                                "Выбран в бой"
-                                                                            }
-                                                                        } else if is_split {
-                                                                            "В бой"
-                                                                        } else {
-                                                                            "Выбрать в бой"
-                                                                        }),
-                                                                        TextFont::from_font_size(
-                                                                            10.0,
-                                                                        ),
-                                                                        TextColor(Color::srgb(
-                                                                            0.90, 0.98, 0.90,
-                                                                        )),
-                                                                    ));
-                                                                });
-                                                        } else if researched {
-                                                            let can_afford = prog.credits
-                                                                >= t.credit_cost as u64;
-                                                            actions
-                                                                .spawn((
-                                                                    Interaction::default(),
-                                                                    HangarButton::BuyTank(g_idx),
-                                                                    Node {
-                                                                        padding: UiRect::axes(
-                                                                            Val::Px(if is_split {
-                                                                                6.0
-                                                                            } else {
-                                                                                8.0
-                                                                            }),
-                                                                            Val::Px(3.0),
-                                                                        ),
-                                                                        border: UiRect::all(
-                                                                            Val::Px(1.0),
-                                                                        ),
-                                                                        border_radius:
-                                                                            BorderRadius::all(
-                                                                                Val::Px(3.0),
-                                                                            ),
-                                                                        ..default()
-                                                                    },
-                                                                    BackgroundColor(
-                                                                        if can_afford {
-                                                                            Color::srgb(
-                                                                                0.46, 0.28, 0.08,
-                                                                            )
-                                                                        } else {
-                                                                            Color::srgba(
-                                                                                0.24, 0.12, 0.10,
-                                                                                0.92,
-                                                                            )
-                                                                        },
-                                                                    ),
-                                                                    BorderColor::all(
-                                                                        if can_afford {
-                                                                            Color::srgb(
-                                                                                0.96, 0.72, 0.24,
-                                                                            )
-                                                                        } else {
-                                                                            Color::srgb(
-                                                                                0.62, 0.34, 0.28,
-                                                                            )
-                                                                        },
-                                                                    ),
-                                                                ))
-                                                                .with_children(|b| {
-                                                                    b.spawn((
-                                                                        Text::new(if is_split {
-                                                                            format!(
-                                                                                "Купить: {}с",
-                                                                                t.credit_cost
-                                                                            )
-                                                                        } else {
-                                                                            format!(
-                                                                                "Купить: {} сер.",
-                                                                                t.credit_cost
-                                                                            )
-                                                                        }),
-                                                                        TextFont::from_font_size(
-                                                                            10.0,
-                                                                        ),
-                                                                        TextColor(Color::srgb(
-                                                                            1.0, 0.92, 0.72,
-                                                                        )),
-                                                                    ));
-                                                                });
-                                                        } else if prereq_met {
-                                                            let can_xp =
-                                                                prog.xp >= t.xp_cost as u64;
-                                                            actions
-                                                                .spawn((
-                                                                    Interaction::default(),
-                                                                    HangarButton::ResearchTank(
-                                                                        g_idx,
-                                                                    ),
-                                                                    Node {
-                                                                        padding: UiRect::axes(
-                                                                            Val::Px(if is_split {
-                                                                                6.0
-                                                                            } else {
-                                                                                8.0
-                                                                            }),
-                                                                            Val::Px(3.0),
-                                                                        ),
-                                                                        border: UiRect::all(
-                                                                            Val::Px(1.0),
-                                                                        ),
-                                                                        border_radius:
-                                                                            BorderRadius::all(
-                                                                                Val::Px(3.0),
-                                                                            ),
-                                                                        ..default()
-                                                                    },
-                                                                    BackgroundColor(if can_xp {
-                                                                        Color::srgb(
-                                                                            0.12, 0.28, 0.44,
-                                                                        )
-                                                                    } else {
-                                                                        Color::srgba(
-                                                                            0.16, 0.12, 0.18, 0.90,
-                                                                        )
-                                                                    }),
-                                                                    BorderColor::all(if can_xp {
-                                                                        Color::srgb(0.44, 0.80, 1.0)
-                                                                    } else {
-                                                                        Color::srgb(
-                                                                            0.46, 0.42, 0.56,
-                                                                        )
-                                                                    }),
-                                                                ))
-                                                                .with_children(|b| {
-                                                                    b.spawn((
-                                                                        Text::new(if is_split {
-                                                                            format!(
-                                                                                "Откр.: {}о",
-                                                                                t.xp_cost
-                                                                            )
-                                                                        } else {
-                                                                            format!(
-                                                                                "Исследовать: {} оп.",
-                                                                                t.xp_cost
-                                                                            )
-                                                                        }),
-                                                                        TextFont::from_font_size(
-                                                                            10.0,
-                                                                        ),
-                                                                        TextColor(Color::srgb(
-                                                                            0.86, 0.96, 1.0,
-                                                                        )),
-                                                                    ));
-                                                                });
-                                                        } else {
-                                                            let prereq_name =
-                                                                prerequisite_label_ru(t, all_tanks);
-                                                            actions.spawn((
-                                                                Text::new(if is_split {
-                                                                    format!(
-                                                                        "Нужен {prereq_name}"
-                                                                    )
-                                                                } else {
-                                                                    format!(
-                                                                        "Нужен {prereq_name} ({} оп.)",
-                                                                        t.xp_cost
-                                                                    )
-                                                                }),
-                                                                TextFont::from_font_size(9.5),
-                                                                TextColor(Color::srgb(
-                                                                    0.56, 0.60, 0.68,
-                                                                )),
-                                                            ));
-                                                        }
-                                                    });
-                                                });
-                                        }
+                                                Color::srgb(0.76, 0.82, 0.90)
+                                            }),
+                                        ));
+                                        nb.spawn((
+                                            Text::new(format!(
+                                                "{} • {} маш.",
+                                                nation_tier_span(nation),
+                                                n_count
+                                            )),
+                                            TextFont::from_font_size(10.0),
+                                            TextColor(Color::srgb(0.66, 0.74, 0.84)),
+                                        ));
+                                        nb.spawn((
+                                            Text::new(format!("В ангаре: {n_owned}/{n_count}")),
+                                            TextFont::from_font_size(9.5),
+                                            TextColor(if is_sel {
+                                                Color::srgb(0.54, 0.88, 0.60)
+                                            } else {
+                                                Color::srgb(0.56, 0.64, 0.72)
+                                            }),
+                                        ));
                                     });
+                            }
+                        });
+
+                        // Правая панель: горизонтальное дерево развития выбранной нации слева направо.
+                        body.spawn((
+                            Node {
+                                flex_grow: 1.0,
+                                flex_basis: Val::Px(0.0),
+                                flex_direction: FlexDirection::Column,
+                                padding: UiRect::all(Val::Px(8.0)),
+                                border: UiRect::all(Val::Px(1.5)),
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                row_gap: Val::Px(6.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.04, 0.056, 0.08, 0.94)),
+                            BorderColor::all(accent),
+                        ))
+                        .with_children(|tree_panel| {
+                            // Заголовок нации и легенда уровней.
+                            tree_panel
+                                .spawn(Node {
+                                    width: Val::Percent(100.0),
+                                    justify_content: JustifyContent::SpaceBetween,
+                                    align_items: AlignItems::Center,
+                                    ..default()
+                                })
+                                .with_children(|th| {
+                                    th.spawn((
+                                        Text::new(format!(
+                                            "{}  •  ГОРИЗОНТАЛЬНАЯ ВЕТКА ИССЛЕДОВАНИЯ ({} • {} МАШИН)",
+                                            active_nation.ru_name(),
+                                            nation_tier_span(active_nation),
+                                            nation_count
+                                        )),
+                                        TextFont::from_font_size(12.5),
+                                        TextColor(Color::srgb(0.96, 0.94, 0.88)),
+                                    ));
+                                    th.spawn((
+                                        Text::new(format!(
+                                            "Прогресс: слева направо (I -> {}) • разветвление = альтернативные ветки",
+                                            tier_roman(max_tier)
+                                        )),
+                                        TextFont::from_font_size(10.0),
+                                        TextColor(Color::srgb(0.66, 0.75, 0.85)),
+                                    ));
+                                });
+
+                            let branch: Vec<(usize, &TankSpec)> = all_tanks
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, t)| t.nation_id == active_nation)
+                                .collect();
+
+                            let mut columns: Vec<(u8, Vec<(usize, &TankSpec)>)> = Vec::new();
+                            let mut prev_ids: Vec<String> = Vec::new();
+                            for tier in 1..=max_tier {
+                                let raw: Vec<(usize, &TankSpec)> = branch
+                                    .iter()
+                                    .copied()
+                                    .filter(|(_, t)| t.tier == tier)
+                                    .collect();
+                                if raw.is_empty() {
+                                    continue;
                                 }
-                            });
-                        }
+                                let ordered = order_tier_column(raw, &prev_ids);
+                                prev_ids = ordered.iter().map(|(_, s)| s.id.clone()).collect();
+                                columns.push((tier, ordered));
+                            }
+
+                            // Заголовки столбцов уровней (I, II, III...).
+                            tree_panel
+                                .spawn(Node {
+                                    width: Val::Percent(100.0),
+                                    flex_direction: FlexDirection::Row,
+                                    align_items: AlignItems::Center,
+                                    ..default()
+                                })
+                                .with_children(|hdr_row| {
+                                    for (col_idx, (tier, _)) in columns.iter().enumerate() {
+                                        if col_idx > 0 {
+                                            hdr_row.spawn(Node {
+                                                width: Val::Px(14.0),
+                                                flex_shrink: 0.0,
+                                                ..default()
+                                            });
+                                        }
+                                        hdr_row
+                                            .spawn(Node {
+                                                flex_grow: 1.0,
+                                                flex_basis: Val::Px(0.0),
+                                                justify_content: JustifyContent::Center,
+                                                padding: UiRect::vertical(Val::Px(2.0)),
+                                                border: UiRect::bottom(Val::Px(1.0)),
+                                                ..default()
+                                            })
+                                            .insert(BorderColor::all(Color::srgba(
+                                                0.30, 0.38, 0.48, 0.7,
+                                            )))
+                                            .with_children(|hc| {
+                                                hc.spawn((
+                                                    Text::new(format!("{} УР.", tier_roman(*tier))),
+                                                    TextFont::from_font_size(10.5),
+                                                    TextColor(Color::srgb(0.95, 0.78, 0.42)),
+                                                ));
+                                            });
+                                    }
+                                });
+
+                            // Основная дорожка карточек и соединительных ветвлений слева направо.
+                            tree_panel
+                                .spawn(Node {
+                                    width: Val::Percent(100.0),
+                                    height: Val::Px(TREE_TRACK_HEIGHT_PX),
+                                    flex_direction: FlexDirection::Row,
+                                    align_items: AlignItems::Center,
+                                    ..default()
+                                })
+                                .with_children(|track| {
+                                    let mut prev_count = 0usize;
+                                    for (col_idx, (tier, col_tanks)) in columns.iter().enumerate() {
+                                        if col_idx > 0 && prev_count > 0 {
+                                            spawn_tree_connector(
+                                                track,
+                                                prev_count,
+                                                col_tanks.len(),
+                                                accent,
+                                            );
+                                        }
+                                        prev_count = col_tanks.len();
+
+                                        track
+                                            .spawn((
+                                                TechTreeColumn {
+                                                    nation: active_nation,
+                                                    tier: *tier,
+                                                },
+                                                Node {
+                                                    flex_grow: 1.0,
+                                                    flex_basis: Val::Px(0.0),
+                                                    height: Val::Px(TREE_TRACK_HEIGHT_PX),
+                                                    ..default()
+                                                },
+                                            ))
+                                            .with_children(|col_slot| {
+                                                if col_tanks.len() == 1 {
+                                                    let (g_idx, t) = col_tanks[0];
+                                                    spawn_tech_tree_card(
+                                                        col_slot,
+                                                        TREE_MID_SLOT_TOP_PX,
+                                                        g_idx,
+                                                        t,
+                                                        all_tanks,
+                                                        prog,
+                                                        selected_tank,
+                                                        view,
+                                                    );
+                                                } else {
+                                                    for (slot_idx, &(g_idx, t)) in
+                                                        col_tanks.iter().take(2).enumerate()
+                                                    {
+                                                        let top_px = if slot_idx == 0 {
+                                                            0.0
+                                                        } else {
+                                                            TREE_BOTTOM_SLOT_TOP_PX
+                                                        };
+                                                        spawn_tech_tree_card(
+                                                            col_slot,
+                                                            top_px,
+                                                            g_idx,
+                                                            t,
+                                                            all_tanks,
+                                                            prog,
+                                                            selected_tank,
+                                                            view,
+                                                        );
+                                                    }
+                                                }
+                                            });
+                                    }
+                                });
+                        });
                     });
             });
     });
@@ -1496,7 +1643,7 @@ fn spawn_hangar_ui(
 ) {
     let combat_spec = owned_combat_spec(selected_tank, prog);
     let (brief_title, brief_body, brief_accent) =
-        map_brief_text(&selected_map.0, maps, all_tanks);
+        map_brief_text(&selected_map.0, maps, &combat_spec);
     let meta = tank_wot_meta(preview_spec);
     let ratings = compute_tank_ratings(preview_spec);
     let wt_mode = mode == DamageRulesMode::ModulesOnlyWt;
@@ -1575,7 +1722,7 @@ fn spawn_hangar_ui(
                             ))
                             .with_children(|b| {
                                 b.spawn((
-                                    Text::new("v1.4.2"),
+                                    Text::new("v1.5"),
                                     TextFont::from_font_size(11.5),
                                     TextColor(Color::srgb(1.0, 0.92, 0.78)),
                                 ));
@@ -1666,7 +1813,7 @@ fn spawn_hangar_ui(
                                 });
 
                             right.spawn((
-                                Text::new("5v5 • 18 машин • AP-Only"),
+                                Text::new("5v5 • 30 машин • AP-Only"),
                                 TextFont::from_font_size(11.0),
                                 TextColor(Color::srgb(0.68, 0.75, 0.82)),
                             ));
@@ -2416,7 +2563,7 @@ fn spawn_hangar_ui(
                             filter_tab_button(
                                 tabs,
                                 HangarFilter::Nation(nation),
-                                format!("{} (I–V)", nation.ru_name()),
+                                format!("{} ({})", nation.ru_name(), nation_tier_span(nation)),
                                 view.filter_tab == HangarFilter::Nation(nation),
                                 nation.accent(),
                             );
@@ -2444,6 +2591,7 @@ fn spawn_hangar_ui(
 
                 // Нижняя карусель танков выбранного фильтра.
                 let compact = visible_indices.len() > 6;
+                let ultra_compact = visible_indices.len() > 8;
                 bottom
                     .spawn((
                         Node {
@@ -2451,7 +2599,7 @@ fn spawn_hangar_ui(
                             padding: UiRect::all(Val::Px(5.0)),
                             border: UiRect::top(Val::Px(1.0)),
                             border_radius: BorderRadius::all(Val::Px(4.0)),
-                            column_gap: Val::Px(6.0),
+                            column_gap: Val::Px(if ultra_compact { 4.0 } else { 6.0 }),
                             row_gap: Val::Px(5.0),
                             flex_wrap: FlexWrap::Wrap,
                             justify_content: JustifyContent::Center,
@@ -2476,9 +2624,9 @@ fn spawn_hangar_ui(
                             } else if owned {
                                 tm.nation_short
                             } else if researched {
-                                "ОТКРЫТ"
+                                "ОТКР."
                             } else {
-                                "ЗАКРЫТ"
+                                "ЗАКР."
                             };
 
                             let card_bg = if is_combat && is_preview {
@@ -2506,12 +2654,22 @@ fn spawn_hangar_ui(
                             };
 
                             let sub_line = if owned {
-                                format!(
-                                    "{:.0}мм • {:.0} HP • {:.0} км/ч",
-                                    t.shell.caliber_mm, t.max_hp, t.max_speed_kmh
-                                )
+                                if ultra_compact {
+                                    format!("{:.0}мм • {:.0} HP", t.shell.caliber_mm, t.max_hp)
+                                } else {
+                                    format!(
+                                        "{:.0}мм • {:.0} HP • {:.0} км/ч",
+                                        t.shell.caliber_mm, t.max_hp, t.max_speed_kmh
+                                    )
+                                }
                             } else if researched {
-                                format!("Купить: {} сер.", t.credit_cost)
+                                if ultra_compact {
+                                    format!("Куп: {} с.", t.credit_cost)
+                                } else {
+                                    format!("Купить: {} сер.", t.credit_cost)
+                                }
+                            } else if ultra_compact {
+                                format!("{}о / {}с", t.xp_cost, t.credit_cost)
                             } else {
                                 format!("{} оп. / {} сер.", t.xp_cost, t.credit_cost)
                             };
@@ -2522,11 +2680,23 @@ fn spawn_hangar_ui(
                                     HangarButton::SelectTank(g_idx),
                                     Node {
                                         flex_grow: if compact { 0.0 } else { 1.0 },
-                                        min_width: Val::Px(if compact { 132.0 } else { 148.0 }),
-                                        max_width: Val::Px(if compact { 166.0 } else { 235.0 }),
+                                        min_width: Val::Px(if ultra_compact {
+                                            104.0
+                                        } else if compact {
+                                            128.0
+                                        } else {
+                                            148.0
+                                        }),
+                                        max_width: Val::Px(if ultra_compact {
+                                            124.0
+                                        } else if compact {
+                                            162.0
+                                        } else {
+                                            235.0
+                                        }),
                                         padding: UiRect::axes(
-                                            Val::Px(9.0),
-                                            Val::Px(if compact { 4.0 } else { 6.0 }),
+                                            Val::Px(if ultra_compact { 6.0 } else { 9.0 }),
+                                            Val::Px(if compact { 3.5 } else { 6.0 }),
                                         ),
                                         border: UiRect {
                                             top: Val::Px(3.0),
@@ -2559,12 +2729,20 @@ fn spawn_hangar_ui(
                                                 "{key_str}{} {} {}",
                                                 tm.tier, tm.class_icon, tm.class_short
                                             )),
-                                            TextFont::from_font_size(10.5),
+                                            TextFont::from_font_size(if ultra_compact {
+                                                9.2
+                                            } else {
+                                                10.5
+                                            }),
                                             TextColor(Color::srgb(0.96, 0.80, 0.42)),
                                         ));
                                         top_row.spawn((
                                             Text::new(status_badge),
-                                            TextFont::from_font_size(10.0),
+                                            TextFont::from_font_size(if ultra_compact {
+                                                8.6
+                                            } else {
+                                                10.0
+                                            }),
                                             TextColor(if is_combat {
                                                 Color::srgb(0.50, 0.94, 0.56)
                                             } else if researched && !owned {
@@ -2578,7 +2756,13 @@ fn spawn_hangar_ui(
                                     });
                                     card.spawn((
                                         Text::new(t.name.clone()),
-                                        TextFont::from_font_size(if compact { 12.0 } else { 13.0 }),
+                                        TextFont::from_font_size(if ultra_compact {
+                                            10.8
+                                        } else if compact {
+                                            12.0
+                                        } else {
+                                            13.0
+                                        }),
                                         TextColor(if owned || researched {
                                             Color::srgb(0.96, 0.97, 0.99)
                                         } else {
@@ -2587,7 +2771,11 @@ fn spawn_hangar_ui(
                                     ));
                                     card.spawn((
                                         Text::new(sub_line),
-                                        TextFont::from_font_size(10.0),
+                                        TextFont::from_font_size(if ultra_compact {
+                                            8.8
+                                        } else {
+                                            10.0
+                                        }),
                                         TextColor(if owned {
                                             Color::srgb(0.72, 0.78, 0.86)
                                         } else if researched {
@@ -2921,6 +3109,15 @@ pub fn update_hangar(
             HangarButton::SelectRandomMap => new_map_choice = Some(0),
             HangarButton::SelectMap(i) if i < maps.len() => new_map_choice = Some(i + 1),
             HangarButton::ToggleTechTree => toggle_tree = true,
+            HangarButton::SelectTechTreeNation(nation) => {
+                if view.tech_tree_nation != nation {
+                    view.tech_tree_nation = nation;
+                    view.notice = None;
+                    ui_dirty = true;
+                    view.suppress_click_frames = 2;
+                    clicked = true;
+                }
+            }
             HangarButton::SelectFilter(next_filter) => {
                 if view.filter_tab != next_filter {
                     view.filter_tab = next_filter;
@@ -2955,6 +3152,7 @@ pub fn update_hangar(
             HangarButton::InspectTank(g_idx) if g_idx < all_tanks.len() => {
                 let target = &all_tanks[g_idx];
                 view.preview_tank_id = target.id.clone();
+                view.tech_tree_nation = target.nation_id;
                 if is_owned(&prog_snapshot, &target.id) {
                     selected_tank.0 = TankId(target.id.clone());
                 }
@@ -2967,6 +3165,7 @@ pub fn update_hangar(
             HangarButton::SelectOwnedAndClose(g_idx) if g_idx < all_tanks.len() => {
                 let target = &all_tanks[g_idx];
                 view.preview_tank_id = target.id.clone();
+                view.tech_tree_nation = target.nation_id;
                 if is_owned(&prog_snapshot, &target.id) {
                     selected_tank.0 = TankId(target.id.clone());
                 }
@@ -2977,6 +3176,7 @@ pub fn update_hangar(
             }
             HangarButton::ResearchTank(g_idx) if g_idx < all_tanks.len() => {
                 let target = &all_tanks[g_idx];
+                view.tech_tree_nation = target.nation_id;
                 if let Some(ref mut prog) = prog_pair.0 {
                     match research_tank(prog, target) {
                         Ok(()) => {
@@ -3000,6 +3200,7 @@ pub fn update_hangar(
             }
             HangarButton::BuyTank(g_idx) if g_idx < all_tanks.len() => {
                 let target = &all_tanks[g_idx];
+                view.tech_tree_nation = target.nation_id;
                 if let Some(ref mut prog) = prog_pair.0 {
                     match buy_tank(prog, target) {
                         Ok(()) => {
@@ -3058,6 +3259,14 @@ pub fn update_hangar(
     }
     if toggle_tree {
         view.show_tech_tree = !view.show_tech_tree;
+        if view.show_tech_tree {
+            view.tech_tree_nation = match view.filter_tab {
+                HangarFilter::Nation(n) => n,
+                HangarFilter::AllOwned => load_tank_spec(&view.preview_tank_id)
+                    .map(|s| s.nation_id)
+                    .unwrap_or(Nation::Ussr),
+            };
+        }
         ui_dirty = true;
         view.suppress_click_frames = 2;
         clicked = true;
@@ -3129,7 +3338,7 @@ pub fn update_hangar(
     } else {
         maps.iter().position(|m| m.id == selected_map.0).or(Some(0))
     };
-    let (brief_title, brief_body, _) = map_brief_text(&selected_map.0, &maps, &all_tanks);
+    let (brief_title, brief_body, _) = map_brief_text(&selected_map.0, &maps, &combat_spec);
 
     let muted = audio_pair.0.as_ref().is_some_and(|a| a.muted);
     let wt_mode = *mode == DamageRulesMode::ModulesOnlyWt;
@@ -3340,6 +3549,23 @@ pub fn update_hangar(
                     BackgroundColor(Color::srgb(0.84, 0.29, 0.10))
                 };
             }
+            HangarButton::SelectTechTreeNation(n) => {
+                let is_sel = view.tech_tree_nation == n;
+                *bg = if is_sel {
+                    BackgroundColor(Color::srgba(0.11, 0.16, 0.24, 0.98))
+                } else if *interaction == Interaction::Hovered {
+                    BackgroundColor(Color::srgba(0.09, 0.13, 0.19, 0.95))
+                } else {
+                    BackgroundColor(Color::srgba(0.045, 0.062, 0.088, 0.92))
+                };
+                *border = BorderColor::all(if is_sel {
+                    n.accent()
+                } else if *interaction == Interaction::Hovered {
+                    Color::srgb(0.58, 0.68, 0.80)
+                } else {
+                    Color::srgba(0.28, 0.35, 0.44, 0.8)
+                });
+            }
             _ => {}
         }
     }
@@ -3424,9 +3650,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hangar_tank_ratings_and_meta_cover_all_fifteen_vehicles() {
+    fn hangar_tank_ratings_and_meta_cover_all_thirty_vehicles() {
         let tanks = available_tanks();
-        assert_eq!(tanks.len(), 18);
+        assert_eq!(tanks.len(), 30);
         for spec in &tanks {
             let r = compute_tank_ratings(spec);
             assert!((0.0..=1.0).contains(&r.firepower));
@@ -3444,15 +3670,15 @@ mod tests {
         assert_eq!(owned.len(), 3);
         assert_eq!(
             filtered_carousel_indices(&tanks, &prog, HangarFilter::Nation(Nation::Ussr)).len(),
-            7
+            11
         );
         assert_eq!(
             filtered_carousel_indices(&tanks, &prog, HangarFilter::Nation(Nation::Germany)).len(),
-            6
+            8
         );
         assert_eq!(
             filtered_carousel_indices(&tanks, &prog, HangarFilter::Nation(Nation::Usa)).len(),
-            5
+            11
         );
     }
 
@@ -3460,14 +3686,95 @@ mod tests {
     fn hangar_random_brief_describes_nine_combat_maps_without_polygon() {
         let maps = available_maps();
         let pool = random_map_pool();
-        let tanks = available_tanks();
+        let combat = load_tank_spec("t34_85").expect("t34_85");
         assert_eq!(maps.len(), 10);
         assert_eq!(pool.len(), 9);
-        let (title, body, _) = map_brief_text(RANDOM_MAP_ID, &maps, &tanks);
+        let (title, body, _) = map_brief_text(RANDOM_MAP_ID, &maps, &combat);
         assert!(title.contains("Случайная карта"));
         assert!(
             body.contains("9 карт") && body.contains("без Полигона"),
             "брифинг случайной карты должен отражать 9 боевых карт без Полигона: {body}"
         );
+        assert!(
+            body.contains("±1") && body.contains("IV–VI"),
+            "брифинг для Т-34-85 (5 ур.) должен показывать окно ±1 IV–VI: {body}"
+        );
+    }
+
+    #[test]
+    fn horizontal_tech_tree_renders_left_nation_sidebar_and_columns_without_red_hints() {
+        for (nation, expected_tiers) in [
+            (Nation::Ussr, vec![1u8, 2, 3, 4, 5, 6, 7]),
+            (Nation::Germany, vec![1u8, 2, 3, 4, 5, 6]),
+            (Nation::Usa, vec![1u8, 2, 3, 4, 5, 6, 7]),
+        ] {
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins);
+            app.add_systems(Startup, move |mut commands: Commands| {
+                let tanks = available_tanks();
+                let maps = available_maps();
+                let prog = PlayerProgression::default();
+                let selected_tank = SelectedTank(TankId("ms_1".into()));
+                let selected_map = SelectedMap(RANDOM_MAP_ID.to_string());
+                let preview = load_tank_spec("ms_1").expect("ms_1");
+                let view = HangarViewState {
+                    show_tech_tree: true,
+                    tech_tree_nation: nation,
+                    ..default()
+                };
+                spawn_hangar_ui(
+                    &mut commands,
+                    &tanks,
+                    &maps,
+                    &selected_tank,
+                    &selected_map,
+                    DamageRulesMode::ArcadeHpAndModules,
+                    &view,
+                    &prog,
+                    &LastBattleReward::default(),
+                    &preview,
+                    false,
+                );
+            });
+            app.finish();
+            app.cleanup();
+            app.update();
+
+            let mut panel_q = app.world_mut().query::<(&TechTreeModalPanel, &Node)>();
+            assert_eq!(panel_q.iter(app.world()).count(), 1);
+
+            let mut btns_q = app.world_mut().query::<&HangarButton>();
+            let sidebar_nations: Vec<Nation> = btns_q
+                .iter(app.world())
+                .filter_map(|b| match *b {
+                    HangarButton::SelectTechTreeNation(n) => Some(n),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                sidebar_nations,
+                vec![Nation::Ussr, Nation::Germany, Nation::Usa]
+            );
+
+            let mut cols_q = app.world_mut().query::<&TechTreeColumn>();
+            let cols: Vec<(Nation, u8)> = cols_q
+                .iter(app.world())
+                .map(|c| (c.nation, c.tier))
+                .collect();
+            assert_eq!(
+                cols,
+                expected_tiers
+                    .iter()
+                    .map(|&t| (nation, t))
+                    .collect::<Vec<_>>()
+            );
+
+            let mut texts_q = app.world_mut().query::<&Text>();
+            let all_texts: Vec<&str> = texts_q.iter(app.world()).map(|t| t.0.as_str()).collect();
+            assert!(
+                !all_texts.iter().any(|t| t.contains("Кликабель")),
+                "красные пометки с эскиза не должны попадать в дерево исследований"
+            );
+        }
     }
 }

@@ -1,7 +1,7 @@
 (
     id: "m2a4",
-    name: "M2A4 Light",
-    nation: "США",
+    name: "M2A4",
+    nation: "США (ЛТ)",
     nation_id: Usa,
     tier: 1,
     tank_class: Light,

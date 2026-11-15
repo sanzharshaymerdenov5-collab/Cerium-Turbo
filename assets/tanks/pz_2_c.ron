@@ -1,6 +1,6 @@
 (
     id: "pz_2_c",
-    name: "Pz.Kpfw. II Ausf. C",
+    name: "Pz II ausf C",
     nation: "Германия (ЛТ)",
     nation_id: Germany,
     tier: 1,

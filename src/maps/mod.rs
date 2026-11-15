@@ -1,6 +1,7 @@
 //! Модуль карт: загрузка `.ron`, генерация воксельного мира, спавн мишеней и освещения.
 
 pub mod generate;
+pub mod matchmaker;
 pub mod spec;
 
 use avian3d::prelude::*;
@@ -12,12 +13,13 @@ use crate::ballistics::{ArmorPlate, HitLog, TargetInfo};
 use crate::core::{BattleSetupSet, BattleStatus, GameState, SelectedMap, SelectedTank, Team};
 use crate::damage::{DamageFeed, XRayHitReport};
 use crate::tank::spawn::spawn_tank_with_team;
-use crate::tank::{load_tank_spec, spawn_battle_camera};
+use crate::tank::{available_tanks, load_tank_spec, spawn_battle_camera};
 use crate::voxel::{
     ChunkEntities, Material, VoxelAssets, VoxelGrid, VoxelWorld, spawn_world_chunks,
     voxel_model_bundle,
 };
 pub use generate::{generate_map_grid, terrain_height_m};
+pub use matchmaker::{ActiveBattleLineup, build_battle_lineup};
 pub use spec::{
     ALPINE_PASS_RON, BERLIN_PLAZA_RON, CITY_RUINS_RON, DESERT_CANYON_RON, EnemySpawnSpec,
     FROZEN_FORT_RON, MapBiome, MapSpec, NORDIC_FJORD_RON, OASIS_CITADEL_RON,
@@ -46,6 +48,7 @@ impl Plugin for MapPlugin {
 fn resolve_battle_map(
     mut commands: Commands,
     selected_map: Res<SelectedMap>,
+    selected_tank: Option<Res<SelectedTank>>,
     time: Res<Time>,
     mut battle_counter: Local<u64>,
 ) {
@@ -53,7 +56,21 @@ fn resolve_battle_map(
     let seed = (time.elapsed().as_nanos() as u64)
         ^ battle_counter.wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let map_spec = resolve_map_spec(&selected_map.0, seed);
+    let pool = available_tanks();
+    let player_spec = selected_tank
+        .as_deref()
+        .and_then(|st| load_tank_spec(&st.0.0))
+        .or_else(|| load_tank_spec("ms_1"))
+        .unwrap_or_else(|| pool[0].clone());
+    let lineup = build_battle_lineup(
+        &player_spec,
+        map_spec.ally_spawns.len(),
+        map_spec.enemy_spawns.len(),
+        &pool,
+        seed ^ 0xA5A5_5A5A_1234_5678,
+    );
     commands.insert_resource(ActiveBattleMap(map_spec));
+    commands.insert_resource(lineup);
 }
 
 fn build_target_plate_grid(size_xy: (f32, f32)) -> VoxelGrid {
@@ -86,6 +103,7 @@ fn build_target_plate_grid(size_xy: (f32, f32)) -> VoxelGrid {
 fn setup_battle_scene(
     mut commands: Commands,
     active_map: Option<Res<ActiveBattleMap>>,
+    active_lineup: Option<Res<ActiveBattleLineup>>,
     selected_map: Res<SelectedMap>,
     selected_tank: Res<SelectedTank>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -166,7 +184,17 @@ fn setup_battle_scene(
 
     // Танк игрока и камера.
     let tank_spec = load_tank_spec(&selected_tank.0.0)
-        .unwrap_or_else(|| load_tank_spec("t34_85").expect("t34_85"));
+        .unwrap_or_else(|| load_tank_spec("ms_1").expect("ms_1"));
+    let lineup = active_lineup.as_deref().cloned().unwrap_or_else(|| {
+        let pool = available_tanks();
+        build_battle_lineup(
+            &tank_spec,
+            map_spec.ally_spawns.len(),
+            map_spec.enemy_spawns.len(),
+            &pool,
+            1,
+        )
+    });
     let spawn_y = world
         .grid
         .surface_height_at(map_spec.spawn_xz.0, map_spec.spawn_xz.1)
@@ -200,13 +228,14 @@ fn setup_battle_scene(
         })
         .collect();
 
-    // Союзные ИИ-танки (Team::Player, без PlayerTank).
+    // Союзные ИИ-танки (Team::Player, без PlayerTank, уровень ±1 к игроку).
     for (idx, als) in map_spec.ally_spawns.iter().enumerate() {
-        let a_spec = als
-            .tank_id
-            .as_deref()
-            .and_then(load_tank_spec)
-            .unwrap_or_else(|| load_tank_spec("t34_85").expect("t34_85"));
+        let a_spec = lineup
+            .ally_tank_ids
+            .get(idx)
+            .and_then(|id| load_tank_spec(id))
+            .or_else(|| als.tank_id.as_deref().and_then(load_tank_spec))
+            .unwrap_or_else(|| tank_spec.clone());
         let ay = world
             .grid
             .surface_height_at(als.pos_xz.0, als.pos_xz.1)
@@ -236,13 +265,14 @@ fn setup_battle_scene(
         ));
     }
 
-    // Вражеские ИИ-танки.
+    // Вражеские ИИ-танки (уровень ±1 к игроку).
     for (idx, es) in map_spec.enemy_spawns.iter().enumerate() {
-        let e_spec = es
-            .tank_id
-            .as_deref()
-            .and_then(load_tank_spec)
-            .unwrap_or_else(|| load_tank_spec("t34_85").expect("t34_85"));
+        let e_spec = lineup
+            .enemy_tank_ids
+            .get(idx)
+            .and_then(|id| load_tank_spec(id))
+            .or_else(|| es.tank_id.as_deref().and_then(load_tank_spec))
+            .unwrap_or_else(|| tank_spec.clone());
         let ey = world
             .grid
             .surface_height_at(es.pos_xz.0, es.pos_xz.1)
@@ -463,5 +493,41 @@ mod tests {
             "сцепление на льду должно падать до <=0.30, получено {}",
             st.surface_traction
         );
+    }
+
+    #[test]
+    fn resolve_battle_map_builds_plus_minus_one_lineup() {
+        for (tank_id, expected_min, expected_max) in
+            [("ms_1", 1_u8, 2_u8), ("t34_85", 4, 6), ("t34_usa", 6, 7)]
+        {
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, StatesPlugin))
+                .init_state::<GameState>()
+                .insert_resource(SelectedMap(RANDOM_MAP_ID.into()))
+                .insert_resource(SelectedTank(crate::core::TankId(tank_id.into())))
+                .add_systems(OnEnter(GameState::InBattle), resolve_battle_map);
+            app.finish();
+            app.cleanup();
+
+            app.world_mut()
+                .resource_mut::<NextState<GameState>>()
+                .set(GameState::InBattle);
+            app.update();
+
+            let active_map = app.world().resource::<ActiveBattleMap>();
+            assert_ne!(active_map.0.id, PROVING_GROUNDS_ID);
+            let lineup = app.world().resource::<ActiveBattleLineup>();
+            assert_eq!(lineup.min_tier, expected_min);
+            assert_eq!(lineup.max_tier, expected_max);
+            assert_eq!(lineup.ally_tank_ids.len(), 4);
+            assert_eq!(lineup.enemy_tank_ids.len(), 5);
+            for tid in lineup.ally_tank_ids.iter().chain(lineup.enemy_tank_ids.iter()) {
+                let tier = load_tank_spec(tid).unwrap().tier;
+                assert!(
+                    (expected_min..=expected_max).contains(&tier),
+                    "{tank_id} получил бота {tid} уровня {tier}, ожидалось [{expected_min}..={expected_max}]"
+                );
+            }
+        }
     }
 }

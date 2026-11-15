@@ -520,24 +520,29 @@ mod tests {
 
         // Альтернативные ветки (alt_prerequisite): достаточно исследовать ОДИН из пререквизитов.
         let mut alt_prog = PlayerProgression {
-            xp: 20_000,
-            credits: 50_000,
+            xp: 40_000,
+            credits: 80_000,
             ..Default::default()
         };
-        let bt7 = load_tank_spec("bt_7").unwrap();
-        let kv1 = load_tank_spec("kv_1").unwrap();
-        let t34_85 = load_tank_spec("t34_85").unwrap();
-        let su_100 = load_tank_spec("su_100").unwrap();
-        let is_3 = load_tank_spec("is_3").unwrap();
-        assert!(research_tank(&mut alt_prog, &bt7).is_ok());
-        assert!(research_tank(&mut alt_prog, &kv1).is_ok());
-        // Исследован только КВ-1 (без Т-34-76), но открыты обе ветки IV ранга: Т-34-85 и СУ-100.
-        assert!(can_research(&alt_prog, &t34_85));
-        assert!(can_research(&alt_prog, &su_100));
-        assert!(research_tank(&mut alt_prog, &su_100).is_ok());
-        // Исследована только СУ-100 (без Т-34-85), но ИС-3 на V ранге уже доступен к исследованию.
-        assert!(can_research(&alt_prog, &is_3));
-        assert!(research_tank(&mut alt_prog, &is_3).is_ok());
+        let pz4a = load_tank_spec("pz_4_a").unwrap();
+        let pz4 = load_tank_spec("pz_4").unwrap();
+        let panther = load_tank_spec("panther").unwrap();
+        let tiger2 = load_tank_spec("tiger_2").unwrap();
+        assert!(research_tank(&mut alt_prog, &pz4a).is_ok());
+        // Исследован только Pz IV ausf A (без Pz III ausf E), но Pz IV ausf H уже открыт.
+        assert!(can_research(&alt_prog, &pz4));
+        assert!(research_tank(&mut alt_prog, &pz4).is_ok());
+        assert!(research_tank(&mut alt_prog, &panther).is_ok());
+        // Исследована только Panther (без Tiger I), но Tiger II на V ранге уже доступен к исследованию.
+        assert!(can_research(&alt_prog, &tiger2));
+        assert!(research_tank(&mut alt_prog, &tiger2).is_ok());
+
+        let m3 = load_tank_spec("m3_stuart").unwrap();
+        let m8a1 = load_tank_spec("m8a1").unwrap();
+        let m4a1 = load_tank_spec("m4a1_75").unwrap();
+        assert!(research_tank(&mut alt_prog, &m3).is_ok());
+        assert!(research_tank(&mut alt_prog, &m8a1).is_ok());
+        assert!(can_research(&alt_prog, &m4a1));
     }
 
     #[test]

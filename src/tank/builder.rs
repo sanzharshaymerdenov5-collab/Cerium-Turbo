@@ -175,7 +175,11 @@ pub fn build_tank_parts_for_team(p: &ProceduralTankProfile, team: Team) -> TankV
         |pt| ctx.sample_hull(pt),
     );
 
-    let t_half_x = p.turret_radius_x + 0.36;
+    let t_half_x = if ctx.model == TankVisualModel::T29 {
+        p.turret_radius_x + 0.44
+    } else {
+        p.turret_radius_x + 0.36
+    };
     let turret = build_symmetric_grid(
         t_half_x,
         (-p.voxel_size * 0.5, p.turret_height + 0.56),
@@ -191,9 +195,19 @@ pub fn build_tank_parts_for_team(p: &ProceduralTankProfile, team: Team) -> TankV
             | TankVisualModel::Tiger2
             | TankVisualModel::Panther
             | TankVisualModel::Pz4
+            | TankVisualModel::Pz4A
             | TankVisualModel::Pz3
+            | TankVisualModel::Pz3E
             | TankVisualModel::M26Pershing
+            | TankVisualModel::M48A1
+            | TankVisualModel::M4A1_75
             | TankVisualModel::M4A3E8
+            | TankVisualModel::Jumbo76
+            | TankVisualModel::T29
+            | TankVisualModel::T32
+            | TankVisualModel::T34Usa
+            | TankVisualModel::Is1
+            | TankVisualModel::Is2
     ) {
         (p.turret_radius_x * 0.72).max(0.42)
     } else {
@@ -382,6 +396,53 @@ impl<'a> TankBuildCtx<'a> {
                     trailing_rear_idler: false,
                 }
             }
+            TankVisualModel::T50 => {
+                // Т-50: 6 малых торсионных обрезиненных катков + 3 поддерживающих ролика, заднее ведущее.
+                let s = hl / 2.60;
+                let r_road = (belt_h * 0.25).clamp(0.13, 0.18);
+                let y_w = y_track_bot + vs * 0.5 + r_road;
+                let road_wheels = (0..6)
+                    .map(|i| RoadWheel {
+                        z: (-1.60 + i as f32 * 0.64) * s,
+                        y: y_w,
+                        r: r_road,
+                        x_min: inner_w + 0.03,
+                        x_max: hw - 0.02,
+                        spoked: false,
+                        all_steel: false,
+                    })
+                    .collect();
+                let r_ret = (belt_h * 0.12).clamp(0.06, 0.09);
+                let y_ret = y_track_top - vs * 0.45 - r_ret;
+                let rollers = [-1.05, 0.0, 1.05]
+                    .into_iter()
+                    .map(|z| ReturnRoller {
+                        z: z * s,
+                        y: y_ret,
+                        r: r_ret,
+                    })
+                    .collect();
+                let r_front = (belt_h * 0.29).clamp(0.14, 0.22);
+                let r_rear = (belt_h * 0.31).clamp(0.15, 0.23);
+                GearSpec {
+                    road_wheels,
+                    rollers,
+                    bogie_kind: BogieKind::None,
+                    bogie_centers: Vec::new(),
+                    z_front,
+                    y_front: y_track_top - r_front - vs * 0.3,
+                    r_front,
+                    front_drive: false,
+                    z_rear,
+                    y_rear: y_track_top - r_rear - vs * 0.3,
+                    r_rear,
+                    y_track_bot,
+                    y_track_top,
+                    z_bot_start: -1.68 * s,
+                    z_bot_end: 1.68 * s,
+                    trailing_rear_idler: false,
+                }
+            }
             TankVisualModel::T34_76 | TankVisualModel::T34_85 | TankVisualModel::Su100 => {
                 // Т-34 / СУ-100: 5 крупных катков Кристи без роликов; заднее ведущее.
                 let s = hl / 3.0;
@@ -421,8 +482,50 @@ impl<'a> TankBuildCtx<'a> {
                     trailing_rear_idler: false,
                 }
             }
-            TankVisualModel::Kv1 | TankVisualModel::Is3 => {
-                // КВ-1 (цельнометаллические катки) и ИС-3 (обрезиненные штампованные): 6 катков + 3 ролика.
+            TankVisualModel::T44 | TankVisualModel::T54_46 => {
+                // Т-44 / Т-54(46г): 5 крупных торсионных катков с фирменным зазором между 1-м и 2-м катком!
+                let s = hl / 3.05;
+                let r_road = (belt_h - vs * 1.1) * 0.48;
+                let y_w = y_track_bot + vs * 0.5 + r_road;
+                let zs = [-2.04, -0.80, 0.12, 1.04, 1.96].map(|z| z * s);
+                let road_wheels = zs
+                    .into_iter()
+                    .map(|z| RoadWheel {
+                        z,
+                        y: y_w,
+                        r: r_road,
+                        x_min: inner_w + 0.04,
+                        x_max: hw - 0.02,
+                        spoked: model == TankVisualModel::T54_46,
+                        all_steel: false,
+                    })
+                    .collect();
+                let r_front = (belt_h * 0.30).clamp(0.15, 0.25);
+                let r_rear = (belt_h * 0.325).clamp(0.16, 0.27);
+                GearSpec {
+                    road_wheels,
+                    rollers: Vec::new(),
+                    bogie_kind: BogieKind::None,
+                    bogie_centers: Vec::new(),
+                    z_front,
+                    y_front: y_track_top - r_front - vs * 0.3,
+                    r_front,
+                    front_drive: false,
+                    z_rear,
+                    y_rear: y_track_top - r_rear - vs * 0.3,
+                    r_rear,
+                    y_track_bot,
+                    y_track_top,
+                    z_bot_start: -2.10 * s,
+                    z_bot_end: 2.02 * s,
+                    trailing_rear_idler: false,
+                }
+            }
+            TankVisualModel::Kv1
+            | TankVisualModel::Is1
+            | TankVisualModel::Is2
+            | TankVisualModel::Is3 => {
+                // КВ-1 (цельнометаллические катки) и ИС-1 / ИС-2 / ИС-3 (обрезиненные штампованные): 6 катков + 3 ролика.
                 let s = hl / 3.3;
                 let is_kv = model == TankVisualModel::Kv1;
                 let r_road = (belt_h * 0.285).clamp(0.17, 0.25);
@@ -517,8 +620,8 @@ impl<'a> TankBuildCtx<'a> {
                     trailing_rear_idler: false,
                 }
             }
-            TankVisualModel::Pz3 => {
-                // Pz. III Ausf. J: 6 раздельных торсионных катков + 3 заметных ролика; ведущее спереди.
+            TankVisualModel::Pz3 | TankVisualModel::Pz3E => {
+                // Pz. III Ausf. E / J: 6 раздельных торсионных катков + 3 ролика; ведущее спереди.
                 let s = hl / 2.71;
                 let r_road = (belt_h * 0.295).clamp(0.16, 0.23);
                 let y_w = y_track_bot + vs * 0.5 + r_road;
@@ -564,8 +667,8 @@ impl<'a> TankBuildCtx<'a> {
                     trailing_rear_idler: false,
                 }
             }
-            TankVisualModel::Pz4 => {
-                // Pz. IV Ausf. H: 8 малых катков в 4 рессорных тележках + 4 поддерживающих ролика.
+            TankVisualModel::Pz4 | TankVisualModel::Pz4A => {
+                // Pz. IV Ausf. A / H: 8 малых катков в 4 рессорных тележках + 4 поддерживающих ролика.
                 let s = hl / 2.96;
                 let r_road = (belt_h * 0.255).clamp(0.14, 0.21);
                 let y_w = y_track_bot + vs * 0.5 + r_road;
@@ -674,10 +777,60 @@ impl<'a> TankBuildCtx<'a> {
                     trailing_rear_idler: false,
                 }
             }
-            TankVisualModel::M2A4 | TankVisualModel::M3Stuart => {
-                // Американские VVSS (2 сдвоенные тележки): у M3 Stuart задний ленивец опущен на грунт!
+            TankVisualModel::M48A1 => {
+                // M48A1 Patton: 5 катков + 3 поддерживающих ролика + заднее ведущее колесо.
+                let s = hl / 3.44;
+                let r_road = (belt_h * 0.305).clamp(0.17, 0.25);
+                let y_w = y_track_bot + vs * 0.5 + r_road;
+                let road_wheels = (0..5)
+                    .map(|i| RoadWheel {
+                        z: (-2.06 + i as f32 * 0.98) * s,
+                        y: y_w,
+                        r: r_road,
+                        x_min: inner_w + 0.04,
+                        x_max: hw - 0.02,
+                        spoked: false,
+                        all_steel: false,
+                    })
+                    .collect();
+                let r_ret = (belt_h * 0.12).clamp(0.06, 0.10);
+                let y_ret = y_track_top - vs * 0.45 - r_ret;
+                let rollers = [-1.45, -0.05, 1.35]
+                    .into_iter()
+                    .map(|z| ReturnRoller {
+                        z: z * s,
+                        y: y_ret,
+                        r: r_ret,
+                    })
+                    .collect();
+                let r_front = (belt_h * 0.29).clamp(0.16, 0.24);
+                let r_rear = (belt_h * 0.33).clamp(0.18, 0.27);
+                GearSpec {
+                    road_wheels,
+                    rollers,
+                    bogie_kind: BogieKind::None,
+                    bogie_centers: Vec::new(),
+                    z_front,
+                    y_front: y_track_top - r_front - vs * 0.3,
+                    r_front,
+                    front_drive: false,
+                    z_rear,
+                    y_rear: y_track_top - r_rear - vs * 0.3,
+                    r_rear,
+                    y_track_bot,
+                    y_track_top,
+                    z_bot_start: -2.18 * s,
+                    z_bot_end: 2.18 * s,
+                    trailing_rear_idler: false,
+                }
+            }
+            TankVisualModel::M2A4
+            | TankVisualModel::M3Stuart
+            | TankVisualModel::M5A1Stuart
+            | TankVisualModel::M8A1 => {
+                // Американские VVSS (2 сдвоенные тележки): у M3 / M5A1 / M8A1 задний ленивец опущен на грунт!
                 let s = hl / 2.24;
-                let trailing = model == TankVisualModel::M3Stuart;
+                let trailing = model != TankVisualModel::M2A4;
                 let r_road = (belt_h * 0.28).clamp(0.14, 0.20);
                 let y_w = y_track_bot + vs * 0.5 + r_road;
                 let bogie_cs = if trailing { [-0.94, 0.32] } else { [-0.88, 0.58] };
@@ -741,9 +894,10 @@ impl<'a> TankBuildCtx<'a> {
                     trailing_rear_idler: trailing,
                 }
             }
-            TankVisualModel::M4A3E8 => {
-                // M4A3E8 Sherman: 3 характерные горизонтальные тележки HVSS (6 сдвоенных катков) + 3 ролика.
+            TankVisualModel::M4A1_75 | TankVisualModel::Jumbo76 | TankVisualModel::M4A3E8 => {
+                // Sherman: M4A1(75) и Jumbo(76) с вертикальными тележками VVSS, M4A3E8 с широкими HVSS.
                 let s = hl / 2.95;
+                let is_hvss = model == TankVisualModel::M4A3E8;
                 let r_road = (belt_h * 0.285).clamp(0.16, 0.23);
                 let y_w = y_track_bot + vs * 0.5 + r_road;
                 let bogies = [-1.31_f32, 0.0, 1.31];
@@ -785,7 +939,11 @@ impl<'a> TankBuildCtx<'a> {
                 GearSpec {
                     road_wheels,
                     rollers,
-                    bogie_kind: BogieKind::UsHvss,
+                    bogie_kind: if is_hvss {
+                        BogieKind::UsHvss
+                    } else {
+                        BogieKind::UsVvss
+                    },
                     bogie_centers,
                     z_front,
                     y_front: y_track_top - r_front - vs * 0.3,
@@ -894,6 +1052,99 @@ impl<'a> TankBuildCtx<'a> {
                     y_track_top,
                     z_bot_start: -2.12 * s,
                     z_bot_end: 2.12 * s,
+                    trailing_rear_idler: false,
+                }
+            }
+            TankVisualModel::T32 => {
+                // T32: удлинённая 7-катковая база Pershing + 5 роликов + заднее ведущее.
+                let s = hl / 3.525;
+                let r_road = (belt_h * 0.285).clamp(0.16, 0.23);
+                let y_w = y_track_bot + vs * 0.5 + r_road;
+                let road_wheels = (0..7)
+                    .map(|i| RoadWheel {
+                        z: (-2.34 + i as f32 * 0.78) * s,
+                        y: y_w,
+                        r: r_road,
+                        x_min: inner_w + 0.04,
+                        x_max: hw - 0.02,
+                        spoked: false,
+                        all_steel: false,
+                    })
+                    .collect();
+                let r_ret = (belt_h * 0.11).clamp(0.06, 0.09);
+                let y_ret = y_track_top - vs * 0.45 - r_ret;
+                let rollers = [-1.85, -0.92, 0.0, 0.92, 1.85]
+                    .into_iter()
+                    .map(|z| ReturnRoller {
+                        z: z * s,
+                        y: y_ret,
+                        r: r_ret,
+                    })
+                    .collect();
+                let r_front = (belt_h * 0.285).clamp(0.16, 0.24);
+                let r_rear = (belt_h * 0.32).clamp(0.18, 0.26);
+                GearSpec {
+                    road_wheels,
+                    rollers,
+                    bogie_kind: BogieKind::None,
+                    bogie_centers: Vec::new(),
+                    z_front,
+                    y_front: y_track_top - r_front - vs * 0.3,
+                    r_front,
+                    front_drive: false,
+                    z_rear,
+                    y_rear: y_track_top - r_rear - vs * 0.3,
+                    r_rear,
+                    y_track_bot,
+                    y_track_top,
+                    z_bot_start: -2.42 * s,
+                    z_bot_end: 2.42 * s,
+                    trailing_rear_idler: false,
+                }
+            }
+            TankVisualModel::T29 | TankVisualModel::T34Usa => {
+                // T29 / T34: сверхдлинная 8-катковая база с 6 роликами и задним ведущим колесом!
+                let s = hl / 3.80;
+                let r_road = (belt_h * 0.275).clamp(0.15, 0.22);
+                let y_w = y_track_bot + vs * 0.5 + r_road;
+                let road_wheels = (0..8)
+                    .map(|i| RoadWheel {
+                        z: (-2.59 + i as f32 * 0.74) * s,
+                        y: y_w,
+                        r: r_road,
+                        x_min: inner_w + 0.04,
+                        x_max: hw - 0.02,
+                        spoked: false,
+                        all_steel: false,
+                    })
+                    .collect();
+                let r_ret = (belt_h * 0.105).clamp(0.06, 0.09);
+                let y_ret = y_track_top - vs * 0.45 - r_ret;
+                let rollers = (0..6)
+                    .map(|i| ReturnRoller {
+                        z: (-2.22 + i as f32 * 0.89) * s,
+                        y: y_ret,
+                        r: r_ret,
+                    })
+                    .collect();
+                let r_front = (belt_h * 0.285).clamp(0.16, 0.24);
+                let r_rear = (belt_h * 0.32).clamp(0.18, 0.26);
+                GearSpec {
+                    road_wheels,
+                    rollers,
+                    bogie_kind: BogieKind::None,
+                    bogie_centers: Vec::new(),
+                    z_front,
+                    y_front: y_track_top - r_front - vs * 0.3,
+                    r_front,
+                    front_drive: false,
+                    z_rear,
+                    y_rear: y_track_top - r_rear - vs * 0.3,
+                    r_rear,
+                    y_track_bot,
+                    y_track_top,
+                    z_bot_start: -2.68 * s,
+                    z_bot_end: 2.68 * s,
                     trailing_rear_idler: false,
                 }
             }
@@ -1285,15 +1536,62 @@ impl<'a> TankBuildCtx<'a> {
                     -self.hl + 0.06 - bulge + (1.0 - frac) * 0.18
                 }
             }
-            TankVisualModel::M26Pershing => {
-                // M26 Pershing: низкий широкий корпус, ступенчатая литая передача + гладкая 46° ВЛД.
-                let y_mid = dh * 0.58;
+            TankVisualModel::M4A1_75 => {
+                // M4A1(75): округлая литая верхняя лобовая часть + 3-секционная болтовая трансмиссия НЛД.
+                let y_mid = dh * 0.54;
+                let side_curve = (ax / self.hw.max(0.5)).powi(2) * 0.14;
                 if y >= y_mid {
-                    -self.hl + 0.06 + (y - y_mid) * 1.03
+                    -self.hl + 0.08 + side_curve + (y - y_mid) * 1.02
+                } else {
+                    let frac = ((y - self.clearance) / (y_mid - self.clearance).max(0.1))
+                        .clamp(0.0, 1.0);
+                    let bulge = (frac * std::f32::consts::PI).sin() * 0.13;
+                    -self.hl + 0.07 - bulge + side_curve * 0.6 + (1.0 - frac) * 0.17
+                }
+            }
+            TankVisualModel::Jumbo76 => {
+                // M4A3E2 Jumbo: усиленный массивный наклонный лоб + тяжёлая закрытая трансмиссия.
+                let y_mid = dh * 0.55;
+                if y >= y_mid {
+                    -self.hl + 0.02 + (y - y_mid) * 0.98
+                } else {
+                    let frac = ((y - self.clearance) / (y_mid - self.clearance).max(0.1))
+                        .clamp(0.0, 1.0);
+                    let bulge = (frac * std::f32::consts::PI).sin() * 0.15;
+                    -self.hl + 0.03 - bulge + (1.0 - frac) * 0.18
+                }
+            }
+            TankVisualModel::M26Pershing | TankVisualModel::T29 | TankVisualModel::T34Usa => {
+                // M26 Pershing / T29 / T34: широкий корпус, ступенчатая литая передача + гладкая 46° ВЛД.
+                let y_mid = dh * 0.57;
+                if y >= y_mid {
+                    -self.hl + 0.06 + (y - y_mid) * 1.06
                 } else {
                     let frac = ((y - self.clearance) / (y_mid - self.clearance).max(0.1))
                         .clamp(0.0, 1.0);
                     -self.hl + 0.04 + (1.0 - frac) * 0.22
+                }
+            }
+            TankVisualModel::T32 => {
+                // T32: литой обтекаемый тяжёлый нос на базе Pershing.
+                let y_mid = dh * 0.56;
+                let bow_curve = (ax / self.hw.max(0.5)).powi(2) * 0.14;
+                if y >= y_mid {
+                    -self.hl + 0.05 + bow_curve + (y - y_mid) * 1.08
+                } else {
+                    let frac = ((y - self.clearance) / (y_mid - self.clearance).max(0.1))
+                        .clamp(0.0, 1.0);
+                    -self.hl + 0.04 + bow_curve * 0.7 + (1.0 - frac) * 0.22
+                }
+            }
+            TankVisualModel::M48A1 => {
+                // M48A1 Patton: узнаваемый литой эллиптический «лодочный» нос с плавным закруглением к бортам!
+                let y_mid = dh * 0.58;
+                let prow = (ax / self.inner_w.max(0.5)).powi(2) * 0.34;
+                if y >= y_mid {
+                    -self.hl + 0.04 + prow + (y - y_mid) * 1.08
+                } else {
+                    -self.hl + 0.04 + prow * 0.85 + (y_mid - y) * 0.78
                 }
             }
             TankVisualModel::Panther => {
@@ -1314,12 +1612,21 @@ impl<'a> TankBuildCtx<'a> {
                     -self.hl + (y_mid - y) * 0.68
                 }
             }
-            TankVisualModel::T34_76 | TankVisualModel::T34_85 => {
+            TankVisualModel::T34_76 | TankVisualModel::T34_85 | TankVisualModel::T50 => {
                 let y_mid = dh * 0.565;
                 if y >= y_mid {
-                    -self.hl + (y - y_mid) * 1.18
+                    -self.hl + (y - y_mid) * 1.16
                 } else {
                     -self.hl + (y_mid - y) * 0.72
+                }
+            }
+            TankVisualModel::T44 | TankVisualModel::T54_46 => {
+                // Т-44 / Т-54(46г): сплошной гладкий клин ВЛД 60° (без выступа мехвода Т-34).
+                let y_mid = dh * 0.55;
+                if y >= y_mid {
+                    -self.hl + (y - y_mid) * 1.24
+                } else {
+                    -self.hl + (y_mid - y) * 0.74
                 }
             }
             TankVisualModel::Su100 => {
@@ -1328,6 +1635,15 @@ impl<'a> TankBuildCtx<'a> {
                     -self.hl + (y - y_mid) * 0.98
                 } else {
                     -self.hl + (y_mid - y) * 0.66
+                }
+            }
+            TankVisualModel::Is2 => {
+                // ИС-2 (обр. 1944): спрямлённый наклонный литой нос 60° (в отличие от ступеньки ИС-1!).
+                let y_mid = dh * 0.58;
+                if y >= y_mid {
+                    -self.hl + 0.04 + (y - y_mid) * 1.16
+                } else {
+                    -self.hl + 0.04 + (y_mid - y) * 0.70
                 }
             }
             TankVisualModel::Is3 => {
@@ -1339,20 +1655,25 @@ impl<'a> TankBuildCtx<'a> {
                     -self.hl + v + (y_mid - y) * 0.70
                 }
             }
-            TankVisualModel::Kv1 => {
-                // КВ-1: наклонная НЛД -> ровная передняя полка -> почти вертикальная бронеплита мехвода.
-                let y_lo = dh * 0.52;
-                let y_hi = dh * 0.66;
+            TankVisualModel::Kv1 | TankVisualModel::Is1 => {
+                // КВ-1 / ИС-1: наклонная НЛД -> передняя полка -> почти вертикальный щит мехвода.
+                let y_lo = dh * 0.51;
+                let y_hi = dh * 0.65;
                 if y >= y_hi {
-                    -self.hl + 0.48 + (y - y_hi) * 0.36
+                    -self.hl + 0.45 + (y - y_hi) * 0.36
                 } else if y >= y_lo {
                     let frac = (y - y_lo) / (y_hi - y_lo).max(0.05);
-                    -self.hl + 0.10 + frac * 0.38
+                    -self.hl + 0.10 + frac * 0.35
                 } else {
                     -self.hl + 0.10 + (y_lo - y) * 0.72
                 }
             }
-            TankVisualModel::Pz2C | TankVisualModel::Pz3 | TankVisualModel::Pz4 | TankVisualModel::Tiger1 => {
+            TankVisualModel::Pz2C
+            | TankVisualModel::Pz3
+            | TankVisualModel::Pz3E
+            | TankVisualModel::Pz4A
+            | TankVisualModel::Pz4
+            | TankVisualModel::Tiger1 => {
                 // Классический немецкий ступенчатый нос.
                 let s = (self.hl / 3.15).clamp(0.65, 1.15);
                 let y_lo = dh * 0.580;
@@ -1397,6 +1718,15 @@ impl<'a> TankBuildCtx<'a> {
                     -self.hl + 0.16 + (y_mid - y) * 0.42
                 }
             }
+            TankVisualModel::M5A1Stuart | TankVisualModel::M8A1 => {
+                // M5A1 / M8A1: гладкая единая наклонная ВЛД без ступеньки M3 Stuart.
+                let y_mid = dh * 0.55;
+                if y >= y_mid {
+                    -self.hl + 0.04 + (y - y_mid) * 1.05
+                } else {
+                    -self.hl + 0.04 + (y_mid - y) * 0.58
+                }
+            }
             TankVisualModel::M24Chaffee => {
                 // M24 Chaffee: сильно скошенный низкий обтекаемый лоб 60°.
                 let y_mid = dh * 0.55;
@@ -1413,18 +1743,28 @@ impl<'a> TankBuildCtx<'a> {
     fn hull_rear_z(&self, y: f32) -> f32 {
         let base_drop = (y - self.clearance).max(0.0);
         match self.model {
-            TankVisualModel::Kv1 => {
-                // КВ-1: изогнутый назад/вверх закруглённый нижний кормовой лист.
+            TankVisualModel::Kv1 | TankVisualModel::Is1 | TankVisualModel::Is2 => {
+                // КВ-1 / ИС-1 / ИС-2: характерная изогнутая назад-вверх корма.
                 let frac = ((y - self.clearance) / (self.p.deck_height - self.clearance).max(0.1))
                     .clamp(0.0, 1.0);
                 self.hl - 0.10 - (1.0 - frac).powi(2) * 0.18
             }
-            TankVisualModel::M4A3E8 | TankVisualModel::Tiger1 | TankVisualModel::Pz2C | TankVisualModel::Pz3 | TankVisualModel::Pz4 => {
-                self.hl - base_drop * 0.08
-            }
-            TankVisualModel::M26Pershing | TankVisualModel::Panther | TankVisualModel::Tiger2 => {
-                self.hl - base_drop * 0.22
-            }
+            TankVisualModel::M4A3E8
+            | TankVisualModel::M4A1_75
+            | TankVisualModel::Jumbo76
+            | TankVisualModel::Tiger1
+            | TankVisualModel::Pz2C
+            | TankVisualModel::Pz3
+            | TankVisualModel::Pz3E
+            | TankVisualModel::Pz4A
+            | TankVisualModel::Pz4 => self.hl - base_drop * 0.08,
+            TankVisualModel::M26Pershing
+            | TankVisualModel::M48A1
+            | TankVisualModel::T29
+            | TankVisualModel::T32
+            | TankVisualModel::T34Usa
+            | TankVisualModel::Panther
+            | TankVisualModel::Tiger2 => self.hl - base_drop * 0.22,
             TankVisualModel::Ms1 => {
                 // Задняя моторная часть МС-1 скошена к хвосту.
                 self.hl - base_drop * 0.30
@@ -1449,16 +1789,35 @@ impl<'a> TankBuildCtx<'a> {
         }
         let tw = self.hw - self.inner_w;
         match self.model {
-            TankVisualModel::M4A3E8 => {
+            TankVisualModel::M4A3E8 | TankVisualModel::Jumbo76 => {
                 // Высокие почти вертикальные борта Шермана со слегка закруглённым верхним кантом.
                 if t > 0.85 {
-                    self.hw - 0.04 - (t - 0.85) * 0.45
+                    self.hw - 0.03 - (t - 0.85) * 0.42
                 } else {
-                    self.hw - 0.03
+                    self.hw - 0.02
                 }
             }
-            TankVisualModel::M26Pershing => {
-                // Низкий широкий корпус M26 с узкими скосами надгусеничных спонсонов.
+            TankVisualModel::M4A1_75 => {
+                // M4A1(75): округло-литая верхняя кромка корпуса (резкое отличие от сварных M4A3E8/Jumbo!).
+                let shoulder_bevel = if t > 0.45 {
+                    ((t - 0.45) / 0.55).powi(2) * (tw * 0.46)
+                } else {
+                    0.0
+                };
+                let corner_round = (z.abs() / self.hl.max(0.5)).powi(4) * 0.14;
+                (self.hw - 0.04 - shoulder_bevel - corner_round).max(self.inner_w + 0.04)
+            }
+            TankVisualModel::M48A1 => {
+                // M48A1 Patton: закруглённый литой эллиптический корпус поверх надгусеничных спонсонов.
+                let edge_curve = (z.abs() / self.hl.max(0.5)).powi(3) * (tw * 0.35);
+                let top_round = t * t * (tw * 0.52);
+                (self.inner_w + tw * 0.90 - top_round - edge_curve).max(self.inner_w + 0.05)
+            }
+            TankVisualModel::M26Pershing
+            | TankVisualModel::T29
+            | TankVisualModel::T32
+            | TankVisualModel::T34Usa => {
+                // Низкий широкий корпус семейства Pershing / T29 с узкими скосами спонсонов.
                 self.inner_w + tw * (0.86 - 0.24 * t)
             }
             TankVisualModel::Panther | TankVisualModel::Tiger2 => {
@@ -1474,13 +1833,16 @@ impl<'a> TankBuildCtx<'a> {
                     self.inner_w + tw * (0.62 - 0.18 * t)
                 }
             }
-            TankVisualModel::Pz3 | TankVisualModel::Pz4 => {
+            TankVisualModel::Pz3
+            | TankVisualModel::Pz3E
+            | TankVisualModel::Pz4A
+            | TankVisualModel::Pz4 => {
                 // Широкий спонсон немецких средних танков до края гусениц.
                 self.inner_w + tw * (0.88 - 0.12 * t)
             }
-            TankVisualModel::Kv1 => {
-                // Строгий вертикальный тяжёлый бронекорпус КВ-1.
-                self.inner_w + tw * (0.58 - 0.08 * t)
+            TankVisualModel::Kv1 | TankVisualModel::Is1 | TankVisualModel::Is2 => {
+                // Строгий тяжёлый узкорубочный бронекорпус КВ / ИС.
+                self.inner_w + tw * (0.58 - 0.10 * t)
             }
             TankVisualModel::Is3 => {
                 (self.inner_w + tw * 0.90) * (1.0 - t) + (self.inner_w + tw * 0.345) * t
@@ -1494,15 +1856,24 @@ impl<'a> TankBuildCtx<'a> {
                     base_w
                 }
             }
-            TankVisualModel::T34_76 | TankVisualModel::T34_85 | TankVisualModel::Su100 => {
+            TankVisualModel::T50
+            | TankVisualModel::T34_76
+            | TankVisualModel::T34_85
+            | TankVisualModel::T44
+            | TankVisualModel::T54_46
+            | TankVisualModel::Su100 => {
                 (self.inner_w + tw * 0.84) * (1.0 - t) + (self.inner_w + tw * 0.32) * t
             }
             TankVisualModel::M24Chaffee => {
                 // Обтекаемые наклонные спонсоны M24 Chaffee.
                 self.inner_w + tw * (0.86 - 0.38 * t)
             }
-            TankVisualModel::Ms1 | TankVisualModel::M2A4 | TankVisualModel::M3Stuart => {
-                (self.inner_w + tw * 0.62) * (1.0 - t) + (self.inner_w + tw * 0.24) * t
+            TankVisualModel::Ms1
+            | TankVisualModel::M2A4
+            | TankVisualModel::M3Stuart
+            | TankVisualModel::M5A1Stuart
+            | TankVisualModel::M8A1 => {
+                (self.inner_w + tw * 0.64) * (1.0 - t) + (self.inner_w + tw * 0.26) * t
             }
             TankVisualModel::Auto => unreachable!("resolve_model eliminates Auto"),
         }
@@ -1526,12 +1897,18 @@ impl<'a> TankBuildCtx<'a> {
             return None;
         }
 
-        // Рельефная решётка МТО на кормовой крыше (круглые вентиляторы для Panther, прямоугольные жалюзи для остальных).
+        // Рельефная решётка МТО на кормовой крыше.
         let mto_z0 = self.hl * 0.24;
         let mto_z1 = rear_z - (0.18_f32).min(self.hl * 0.08);
         if pt.y > dh - vs * 1.15 && pt.z > mto_z0 && pt.z < mto_z1 && ax < self.inner_w * 0.74 {
-            if matches!(self.model, TankVisualModel::Panther | TankVisualModel::Tiger2) {
-                // Круглые немецкие вентиляторы по бокам кормы + центральная щель.
+            if matches!(
+                self.model,
+                TankVisualModel::Panther
+                    | TankVisualModel::Tiger2
+                    | TankVisualModel::M48A1
+                    | TankVisualModel::T29
+                    | TankVisualModel::T34Usa
+            ) {
                 let fan_r = self.inner_w * 0.24;
                 let fan_z = (mto_z0 + mto_z1) * 0.50;
                 if (ax - self.inner_w * 0.42).hypot(pt.z - fan_z) <= fan_r {
@@ -1558,8 +1935,8 @@ impl<'a> TankBuildCtx<'a> {
         // Индивидуальные смотровые приборы мехвода на лобовой плите.
         if pt.y >= dh * 0.66 && pt.z < front_z + vs * 1.5 {
             match self.model {
-                TankVisualModel::T34_76 | TankVisualModel::T34_85 => {
-                    // Выпуклый прямоугольный люк мехвода Т-34 слева.
+                TankVisualModel::T34_76 | TankVisualModel::T34_85 | TankVisualModel::T50 => {
+                    // Выпуклый прямоугольный люк мехвода.
                     if (-self.inner_w * 0.62..=-self.inner_w * 0.14).contains(&pt.x)
                         && (dh * 0.73..=dh * 0.92).contains(&pt.y)
                     {
@@ -1571,15 +1948,31 @@ impl<'a> TankBuildCtx<'a> {
                         return Some(self.pal.armor_light);
                     }
                 }
-                TankVisualModel::Kv1 => {
-                    // Центральный козырёк мехвода КВ-1.
-                    if pt.x.abs() <= self.inner_w * 0.22 && (dh * 0.78..=dh * 0.88).contains(&pt.y) {
+                TankVisualModel::T44 | TankVisualModel::T54_46 => {
+                    // Узкая щель триплекса мехвода на гладком ВЛД 60°.
+                    if (-self.inner_w * 0.56..=-self.inner_w * 0.24).contains(&pt.x)
+                        && (dh * 0.84..=dh * 0.92).contains(&pt.y)
+                    {
+                        return Some(Material::TankLens);
+                    }
+                }
+                TankVisualModel::Kv1 | TankVisualModel::Is1 => {
+                    // Центральный козырёк мехвода КВ-1 / ИС-1.
+                    if pt.x.abs() <= self.inner_w * 0.24 && (dh * 0.76..=dh * 0.88).contains(&pt.y) {
+                        return Some(Material::TankLens);
+                    }
+                }
+                TankVisualModel::Is2 => {
+                    // Центральная смотровая щель мехвода на 60° литом носу ИС-2.
+                    if pt.x.abs() <= self.inner_w * 0.22 && (dh * 0.80..=dh * 0.90).contains(&pt.y) {
                         return Some(Material::TankLens);
                     }
                 }
                 TankVisualModel::Tiger1
                 | TankVisualModel::Pz4
+                | TankVisualModel::Pz4A
                 | TankVisualModel::Pz3
+                | TankVisualModel::Pz3E
                 | TankVisualModel::Pz2C => {
                     if (dh * 0.80..=dh * 0.90).contains(&pt.y)
                         && (-self.inner_w * 0.70..=-self.inner_w * 0.32).contains(&pt.x)
@@ -1591,7 +1984,6 @@ impl<'a> TankBuildCtx<'a> {
                     if (dh * 0.86..=dh * 0.94).contains(&pt.y)
                         && (-self.inner_w * 0.60..=-self.inner_w * 0.34).contains(&pt.x) =>
                 {
-                    // Узкая щель перископа / визора на левой стороне ВЛД Panther / Tiger II.
                     return Some(Material::TankLens);
                 }
                 _ => {}
@@ -1600,7 +1992,15 @@ impl<'a> TankBuildCtx<'a> {
 
         // Люки мехвода и стрелка-радиста на передней крыше / ВЛД.
         let is_hatch = match self.model {
-            TankVisualModel::M4A3E8 | TankVisualModel::M26Pershing | TankVisualModel::M24Chaffee => {
+            TankVisualModel::M4A3E8
+            | TankVisualModel::M4A1_75
+            | TankVisualModel::Jumbo76
+            | TankVisualModel::M26Pershing
+            | TankVisualModel::M48A1
+            | TankVisualModel::T29
+            | TankVisualModel::T32
+            | TankVisualModel::T34Usa
+            | TankVisualModel::M24Chaffee => {
                 pt.y > dh - vs * 1.15
                     && (-self.hl * 0.72..=-self.hl * 0.36).contains(&pt.z)
                     && (self.inner_w * 0.22..=self.inner_w * 0.68).contains(&ax)
@@ -1609,10 +2009,14 @@ impl<'a> TankBuildCtx<'a> {
             | TankVisualModel::Tiger2
             | TankVisualModel::Tiger1
             | TankVisualModel::Pz4
+            | TankVisualModel::Pz4A
             | TankVisualModel::Pz3
+            | TankVisualModel::Pz3E
             | TankVisualModel::Pz2C
             | TankVisualModel::M2A4
-            | TankVisualModel::M3Stuart => {
+            | TankVisualModel::M3Stuart
+            | TankVisualModel::M5A1Stuart
+            | TankVisualModel::M8A1 => {
                 pt.y > dh - vs * 1.1
                     && (-self.hl * 0.76..=-self.hl * 0.34).contains(&pt.z)
                     && (self.inner_w * 0.25..=self.inner_w * 0.72).contains(&ax)
@@ -1620,12 +2024,12 @@ impl<'a> TankBuildCtx<'a> {
             _ => false,
         };
 
-        // Задний круглый люк трансмиссии у Т-34 / СУ-100.
+        // Задний круглый люк трансмиссии у Т-34 / Т-50 / СУ-100.
         let trans_y = dh * 0.66;
         let trans_r = (self.inner_w * 0.30).clamp(0.18, 0.32);
         if matches!(
             self.model,
-            TankVisualModel::T34_76 | TankVisualModel::T34_85 | TankVisualModel::Su100
+            TankVisualModel::T34_76 | TankVisualModel::T34_85 | TankVisualModel::T50 | TankVisualModel::Su100
         ) && pt.z > rear_z - vs * 1.3
             && pt.x.hypot(pt.y - trans_y) <= trans_r
         {
@@ -1670,9 +2074,15 @@ impl<'a> TankBuildCtx<'a> {
             }
         }
 
-        // 3. Передние парные бугры-капюшоны люков мехвода/радиста на ВЛД M4A3E8 и M26 Pershing.
-        if matches!(self.model, TankVisualModel::M4A3E8 | TankVisualModel::M26Pershing)
-            && pt.y >= dh * 0.76
+        // 3. Передние парные бугры-капюшоны люков мехвода/радиста на ВЛД американских танков.
+        if matches!(
+            self.model,
+            TankVisualModel::M4A3E8
+                | TankVisualModel::M4A1_75
+                | TankVisualModel::Jumbo76
+                | TankVisualModel::M26Pershing
+                | TankVisualModel::T32
+        ) && pt.y >= dh * 0.76
             && pt.y <= dh + 0.06
             && (ax - self.inner_w * 0.44).abs() <= self.inner_w * 0.24
         {
@@ -1686,9 +2096,50 @@ impl<'a> TankBuildCtx<'a> {
             }
         }
 
-        // 4. Ящики-спонсоны вдоль бортовых полок на M26 Pershing (главный узнаваемый признак M26!).
-        if self.model == TankVisualModel::M26Pershing
-            && ax >= self.inner_w + 0.04
+        // 3b. Дополнительная накладная бронеплита (appliqué) на лбу и бортах M4A3E2 Jumbo(76)!
+        if self.model == TankVisualModel::Jumbo76 {
+            if pt.y >= dh * 0.58 && pt.y <= dh * 0.94 && ax <= self.inner_w * 0.86 {
+                let fz = self.hull_front_z(ax, pt.y);
+                if pt.z >= fz - 0.08 && pt.z <= fz + 0.04 {
+                    return Some(self.pal.hull_paint(pt, false));
+                }
+            }
+            if ax >= self.hw - 0.03
+                && ax <= self.hw + 0.06
+                && pt.y >= self.fender_y1 + 0.04
+                && pt.y <= dh * 0.94
+                && pt.z >= -self.hl * 0.55
+                && pt.z <= self.hl * 0.18
+            {
+                return Some(self.pal.hull_paint(pt, true));
+            }
+        }
+
+        // 3c. Приподнятая ступенька кормового моторного отсека Cadillac на M5A1 Stuart и M8A1 HMC!
+        if matches!(self.model, TankVisualModel::M5A1Stuart | TankVisualModel::M8A1)
+            && pt.z >= self.hl * 0.18
+            && pt.z <= self.hl * 0.88
+            && ax <= self.inner_w * 0.76
+            && pt.y >= dh - 0.04
+            && pt.y <= dh + 0.15
+        {
+            let grate = pt.z >= self.hl * 0.36 && ax <= self.inner_w * 0.46 && pt.y > dh + 0.09;
+            return Some(if grate {
+                self.pal.dark
+            } else {
+                self.pal.hull_paint(pt, false)
+            });
+        }
+
+        // 4. Ящики-спонсоны вдоль бортовых полок на M26 Pershing, M48A1, T29, T32, T34!
+        if matches!(
+            self.model,
+            TankVisualModel::M26Pershing
+                | TankVisualModel::M48A1
+                | TankVisualModel::T29
+                | TankVisualModel::T32
+                | TankVisualModel::T34Usa
+        ) && ax >= self.inner_w + 0.04
             && ax <= self.hw - 0.04
             && pt.y >= self.fender_y1
             && pt.y <= self.fender_y1 + 0.24
@@ -1755,7 +2206,7 @@ impl<'a> TankBuildCtx<'a> {
             return Some(self.pal.hull_paint(pt, false));
         }
 
-        // 8. Запасные траки на ВЛД (Т-34, СУ-100, Panther, Tiger I, Pz IV, M4A3E8).
+        // 8. Запасные траки на ВЛД.
         if matches!(
             self.model,
             TankVisualModel::T34_76
@@ -1763,12 +2214,20 @@ impl<'a> TankBuildCtx<'a> {
                 | TankVisualModel::Su100
                 | TankVisualModel::Panther
                 | TankVisualModel::Tiger1
+                | TankVisualModel::Pz3E
+                | TankVisualModel::Pz4A
                 | TankVisualModel::Pz4
+                | TankVisualModel::M4A1_75
                 | TankVisualModel::M4A3E8
+                | TankVisualModel::Jumbo76
+                | TankVisualModel::T32
         ) && ax <= self.inner_w * 0.52
         {
             let rack_y = match self.model {
-                TankVisualModel::Tiger1 | TankVisualModel::Pz4 => (dh * 0.58, dh * 0.68),
+                TankVisualModel::Tiger1
+                | TankVisualModel::Pz4
+                | TankVisualModel::Pz4A
+                | TankVisualModel::Pz3E => (dh * 0.58, dh * 0.68),
                 TankVisualModel::Panther => (dh * 0.48, dh * 0.62),
                 _ => (dh * 0.54, dh * 0.69),
             };
@@ -1785,15 +2244,38 @@ impl<'a> TankBuildCtx<'a> {
             }
         }
 
-        // 9. Курсовой пулемёт справа на лбу (кроме безбашенных/чистых корпусов без курсового МГ).
+        // 9. Курсовой пулемёт справа на лбу.
         if !matches!(
             self.model,
-            TankVisualModel::Su100 | TankVisualModel::Is3 | TankVisualModel::Ms1 | TankVisualModel::Bt7
+            TankVisualModel::Su100
+                | TankVisualModel::Is3
+                | TankVisualModel::Is1
+                | TankVisualModel::Is2
+                | TankVisualModel::T44
+                | TankVisualModel::T54_46
+                | TankVisualModel::T50
+                | TankVisualModel::Ms1
+                | TankVisualModel::Bt7
+                | TankVisualModel::M8A1
+                | TankVisualModel::T32
         ) {
             let mg_x = self.inner_w * 0.44;
             let mg_y = match self.model {
-                TankVisualModel::Tiger1 | TankVisualModel::Pz4 | TankVisualModel::Pz3 | TankVisualModel::Pz2C => dh * 0.855,
-                TankVisualModel::M4A3E8 | TankVisualModel::M26Pershing | TankVisualModel::Panther | TankVisualModel::Tiger2 => dh * 0.78,
+                TankVisualModel::Tiger1
+                | TankVisualModel::Pz4
+                | TankVisualModel::Pz4A
+                | TankVisualModel::Pz3
+                | TankVisualModel::Pz3E
+                | TankVisualModel::Pz2C => dh * 0.855,
+                TankVisualModel::M4A3E8
+                | TankVisualModel::M4A1_75
+                | TankVisualModel::Jumbo76
+                | TankVisualModel::M26Pershing
+                | TankVisualModel::M48A1
+                | TankVisualModel::T29
+                | TankVisualModel::T34Usa
+                | TankVisualModel::Panther
+                | TankVisualModel::Tiger2 => dh * 0.78,
                 _ => dh * 0.79,
             };
             let mg_z = self.hull_front_z(mg_x, mg_y) - 0.02;
@@ -1825,7 +2307,11 @@ impl<'a> TankBuildCtx<'a> {
 
         // 11. Фара слева спереди.
         let lamp_pos = match self.model {
-            TankVisualModel::Tiger1 | TankVisualModel::Pz4 | TankVisualModel::Pz3 => Vec3::new(
+            TankVisualModel::Tiger1
+            | TankVisualModel::Pz4
+            | TankVisualModel::Pz4A
+            | TankVisualModel::Pz3
+            | TankVisualModel::Pz3E => Vec3::new(
                 -(self.inner_w + tw * 0.60),
                 dh + 0.06,
                 -self.hl + 0.56 * (self.hl / 3.15),
@@ -1857,28 +2343,35 @@ impl<'a> TankBuildCtx<'a> {
             });
         }
 
-        // 12. Наружные цилиндрические топливные баки ТОЛЬКО у советских танков (Т-34, СУ-100, ИС-3)!
+        // 12. Наружные цилиндрические топливные баки советских танков (Т-34, Т-44, Т-54, ИС-1/2/3, СУ-100)!
         if matches!(
             self.model,
             TankVisualModel::T34_76
                 | TankVisualModel::T34_85
+                | TankVisualModel::T44
+                | TankVisualModel::T54_46
                 | TankVisualModel::Su100
+                | TankVisualModel::Is1
+                | TankVisualModel::Is2
                 | TankVisualModel::Is3
         ) {
-            let drum_r = (tw * 0.36).clamp(0.11, 0.18);
-            let (drum_x, drum_y, z0, z1) = if self.model == TankVisualModel::Is3 {
+            let drum_r = (tw * 0.35).clamp(0.11, 0.17);
+            let (drum_x, drum_y, z0, z1) = if matches!(
+                self.model,
+                TankVisualModel::Is1 | TankVisualModel::Is2 | TankVisualModel::Is3
+            ) {
                 (
-                    self.inner_w + tw * 0.69,
+                    self.inner_w + tw * 0.68,
                     dh + drum_r - 0.12,
                     self.hl * 0.26,
                     self.hl * 0.83,
                 )
             } else {
                 (
-                    self.inner_w + tw * 0.72,
+                    self.inner_w + tw * 0.70,
                     self.fender_y1 + drum_r - 0.01,
-                    self.hl * 0.35,
-                    self.hl * 0.85,
+                    self.hl * 0.34,
+                    self.hl * 0.84,
                 )
             };
             if pt.z >= z0 && pt.z <= z1 {
@@ -1895,13 +2388,21 @@ impl<'a> TankBuildCtx<'a> {
             }
         }
 
-        // 13. Бревно самовытаскивания у СУ-100 или длинный ящик-глушитель на левом крыле Pz. II C.
+        // 13. Бревно самовытаскивания у СУ-100 / Т-54(46г) или ящик-глушитель у Pz. II C.
         if self.model == TankVisualModel::Su100
             && pt.x < -(self.inner_w + 0.04)
             && pt.x > -(self.hw - 0.04)
             && pt.z >= -self.hl * 0.22
             && pt.z <= self.hl * 0.28
             && (pt.y - (self.fender_y1 + 0.10)).abs() <= 0.10
+        {
+            return Some(Material::TankWood);
+        }
+        if self.model == TankVisualModel::T54_46
+            && ax <= self.inner_w * 0.78
+            && pt.z >= self.hl * 0.84
+            && pt.z <= self.hl + 0.14
+            && (pt.y - (dh * 0.62)).abs() <= 0.10
         {
             return Some(Material::TankWood);
         }
@@ -1915,11 +2416,7 @@ impl<'a> TankBuildCtx<'a> {
             return Some(Material::TankExhaust);
         }
 
-        // 14. Уникальные выхлопные системы на корме:
-        //  - Tiger I: вертикальные фильтры Фейфеля с кожухами
-        //  - Panther / Tiger II: парные косые выхлопные трубы + квадратные кормовые ящики Staukasten
-        //  - Pz. III / Pz. IV: горизонтальный поперечный цилиндр-глушитель
-        //  - США / СССР: парные кормовые патрубки / дефлекторы
+        // 14. Выхлопные системы на корме.
         match self.model {
             TankVisualModel::Tiger1 => {
                 let ex = self.inner_w * 0.58;
@@ -1941,7 +2438,6 @@ impl<'a> TankBuildCtx<'a> {
             }
             TankVisualModel::Panther | TankVisualModel::Tiger2 => {
                 let rz = self.hull_rear_z(pt.y.min(dh));
-                // Наклонённые назад-вверх выхлопные патрубки.
                 if (ax - self.inner_w * 0.30).abs() <= 0.09
                     && pt.y >= dh * 0.44
                     && pt.y <= dh * 0.96
@@ -1950,7 +2446,6 @@ impl<'a> TankBuildCtx<'a> {
                 {
                     return Some(Material::TankExhaust);
                 }
-                // Пара квадратных кормовых ящиков (Staukasten) на Panther.
                 if self.model == TankVisualModel::Panther
                     && ax >= self.inner_w * 0.48
                     && ax <= self.inner_w * 0.92
@@ -1962,7 +2457,10 @@ impl<'a> TankBuildCtx<'a> {
                     return Some(self.pal.hull_paint(pt, false));
                 }
             }
-            TankVisualModel::Pz3 | TankVisualModel::Pz4 => {
+            TankVisualModel::Pz3
+            | TankVisualModel::Pz3E
+            | TankVisualModel::Pz4A
+            | TankVisualModel::Pz4 => {
                 let ey = self.clearance + 0.24;
                 let rz = self.hull_rear_z(ey);
                 if ax <= self.inner_w * 0.68
@@ -2006,9 +2504,9 @@ impl<'a> TankBuildCtx<'a> {
                 };
                 rx * (1.0 - t * 0.30) * z_taper
             }
-            TankVisualModel::T34_76 => {
-                // Компактная 6-гранная башня «Гайка».
-                let k = 1.0 - t * 0.26;
+            TankVisualModel::T34_76 | TankVisualModel::T50 => {
+                // Компактная гранёно-коническая башня «Гайка» / Т-50.
+                let k = 1.0 - t * 0.25;
                 let z_fac = if pt_z < -rz * 0.15 {
                     let u = ((-pt_z - rz * 0.15) / (rz * 0.85)).clamp(0.0, 1.0);
                     1.0 - u * 0.38
@@ -2020,9 +2518,8 @@ impl<'a> TankBuildCtx<'a> {
                 };
                 rx * k * z_fac
             }
-            TankVisualModel::Kv1 => {
-                // Высокие почти вертикальные борта КВ-1.
-                let k = 1.0 - t * 0.10;
+            TankVisualModel::Kv1 | TankVisualModel::Is1 | TankVisualModel::Is2 => {
+                let k = 1.0 - t * 0.12;
                 rx * k
             }
             _ => rx * (1.0 - t * 0.16),
@@ -2056,9 +2553,18 @@ impl<'a> TankBuildCtx<'a> {
                 let side_x = self.turret_side_limit(pt.y, pt.z, rx, rz, th);
                 pt.x.abs() <= side_x && pt.z >= front_z && pt.z <= rear_z
             }
-            TankVisualModel::Pz4 | TankVisualModel::Pz3 | TankVisualModel::Pz2C => {
+            TankVisualModel::Pz4
+            | TankVisualModel::Pz4A
+            | TankVisualModel::Pz3
+            | TankVisualModel::Pz3E
+            | TankVisualModel::Pz2C => {
                 // Граненные плоские борта со скосом к носу у Pz. II / III / IV.
-                let k = 1.0 - t * 0.08;
+                let slope = if self.model == TankVisualModel::Pz4A {
+                    0.06
+                } else {
+                    0.08
+                };
+                let k = 1.0 - t * slope;
                 let half_x = if pt.z < -rz * 0.15 {
                     let u = ((-pt.z - rz * 0.15) / (rz * 0.85)).clamp(0.0, 1.0);
                     rx * k * (1.0 - 0.36 * u)
@@ -2069,6 +2575,13 @@ impl<'a> TankBuildCtx<'a> {
                     rx * k
                 };
                 pt.x.abs() <= half_x && pt.z >= -rz * (1.0 - t * 0.12) && pt.z <= rz * k
+            }
+            TankVisualModel::M4A1_75 => {
+                // M4A1(75): компактная ранняя литая округлая башня Sherman без крупной ниши T23.
+                let k = 1.0 - t.powf(1.45) * 0.24;
+                let nx = pt.x / (rx * k);
+                let nz = (pt.z - 0.02) / (rz * k);
+                nx * nx + nz * nz <= 1.0
             }
             TankVisualModel::M4A3E8 => {
                 // Литая высокая башня T23: округлый корпус + выдающаяся назад кормовая радиониша!
@@ -2084,24 +2597,57 @@ impl<'a> TankBuildCtx<'a> {
                     && (pt.x / (rx * 0.68)).powi(2) + ((pt.z - rz * 0.72) / (rz * 0.54)).powi(2) <= 1.0;
                 body || bustle
             }
-            TankVisualModel::M26Pershing => {
-                // Низкая широкая башня M26 с ОГРОМНОЙ сужающейся клиновидной кормовой противовесной нишей!
+            TankVisualModel::Jumbo76 => {
+                // M4A3E2 Jumbo: сверхтолстостенная уширенная башня T23 с угловатой кормовой нишей.
+                let k = 1.0 - t * 0.12;
+                let body = {
+                    let nx = pt.x / (rx * k);
+                    let nz = (pt.z - 0.02) / (rz * k * 0.92);
+                    nx * nx + nz * nz <= 1.0
+                };
+                let bustle = pt.z >= rz * 0.16
+                    && pt.z <= rz * 1.22
+                    && pt.y >= th * 0.18
+                    && pt.x.abs() <= rx * 0.78 * k;
+                body || bustle
+            }
+            TankVisualModel::M48A1 => {
+                // M48A1 Patton: крупная яйцевидно-литая полусферическая башня с подрезом основания и вытянутой кормой.
+                let base_pinch = if pt.y < self.p.voxel_size * 1.3 { 0.90 } else { 1.0 };
+                let mid_swell = (t * std::f32::consts::PI).sin() * 0.07;
+                let k = ((1.0 + mid_swell - t.powf(1.65) * 0.32).max(0.48)) * base_pinch;
+                let dome = {
+                    let nx = pt.x / (rx * k);
+                    let nz = (pt.z - 0.04) / (rz * k * 0.96);
+                    nx * nx + nz * nz <= 1.0
+                };
+                let bustle = pt.z >= rz * 0.18
+                    && pt.z <= rz * 1.14
+                    && pt.y >= th * 0.24
+                    && (pt.x / (rx * 0.68)).powi(2) + ((pt.z - rz * 0.64) / (rz * 0.52)).powi(2) <= 1.0;
+                dome || bustle
+            }
+            TankVisualModel::M26Pershing
+            | TankVisualModel::T29
+            | TankVisualModel::T32
+            | TankVisualModel::T34Usa => {
+                // Низкая широкая/удлинённая башня M26 / T29 / T32 / T34 с большой сужающейся нишей.
                 let k = 1.0 - t * 0.18;
                 let front_dome = {
                     let nx = pt.x / (rx * k);
                     let nz = (pt.z + rz * 0.12) / (rz * 0.72 * k);
                     nx * nx + nz * nz <= 1.0
                 };
-                let bustle = pt.z >= -rz * 0.08 && pt.z <= rz * 1.28 && {
-                    let u = ((pt.z + rz * 0.08) / (rz * 1.36)).clamp(0.0, 1.0);
-                    let bx = rx * k * (0.94 - 0.54 * u);
-                    let y_min = th * 0.34 * u * u;
+                let bustle = pt.z >= -rz * 0.08 && pt.z <= rz * 1.26 && {
+                    let u = ((pt.z + rz * 0.08) / (rz * 1.34)).clamp(0.0, 1.0);
+                    let bx = rx * k * (0.94 - 0.50 * u);
+                    let y_min = th * 0.30 * u * u;
                     pt.x.abs() <= bx && pt.y >= y_min && pt.y <= th * (1.0 - 0.08 * u)
                 };
                 front_dome || bustle
             }
-            TankVisualModel::T34_76 => {
-                // Компактная 6-гранная башня «Гайка» Т-34-76 (резкий 20° завал и узкий силуэт).
+            TankVisualModel::T34_76 | TankVisualModel::T50 => {
+                // Компактная 6-гранная башня «Гайка» Т-34-76 / Т-50.
                 let side_x = self.turret_side_limit(pt.y, pt.z, rx, rz, th);
                 let front_z = -rz + t * (rz * 0.24);
                 let rear_z = rz - t * (rz * 0.16);
@@ -2112,6 +2658,21 @@ impl<'a> TankBuildCtx<'a> {
                 let k = 1.0 - t.powf(1.5) * 0.24;
                 let nx = pt.x / (rx * k);
                 let nz = (pt.z - 0.04) / (rz * (1.0 - t * 0.12));
+                nx * nx + nz * nz <= 1.0
+            }
+            TankVisualModel::T44 => {
+                // Т-44: приземистая вытянутая обтекаемая башня (промежуточная между Т-34-85 и Т-54).
+                let k = 1.0 - t.powf(1.45) * 0.26;
+                let nx = pt.x / (rx * k);
+                let nz = (pt.z - 0.06) / (rz * (1.0 - t * 0.14));
+                nx * nx + nz * nz <= 1.0
+            }
+            TankVisualModel::Is1 | TankVisualModel::Is2 => {
+                // ИС-1 / ИС-2: вытянутая тяжёлая литая башня с узкой скулой и длинной овальной кормой.
+                let k = 1.0 - t.powf(1.5) * 0.20;
+                let nose_narrow = 1.0 - ((-pt.z - rz * 0.18).max(0.0) / rz).clamp(0.0, 1.0) * 0.22;
+                let nx = pt.x / (rx * k * nose_narrow);
+                let nz = (pt.z - 0.06) / (rz * (1.0 - t * 0.10));
                 nx * nx + nz * nz <= 1.0
             }
             TankVisualModel::Kv1 => {
@@ -2133,6 +2694,18 @@ impl<'a> TankBuildCtx<'a> {
                     1.0
                 };
                 let k = (1.0 - t.powf(1.9) * 0.42).max(0.46) * base_pinch;
+                let nx = pt.x / (rx * k);
+                let nz = (pt.z - 0.05) / (rz * k);
+                nx * nx + nz * nz <= 1.0
+            }
+            TankVisualModel::T54_46 => {
+                // Т-54 (обр. 1946): низкая «сковородка» с выраженной закраиной снизу (заман) и куполом!
+                let base_pinch = if pt.y < self.p.voxel_size * 1.25 {
+                    0.89
+                } else {
+                    1.0
+                };
+                let k = (1.0 - t.powf(1.75) * 0.44).max(0.45) * base_pinch;
                 let nx = pt.x / (rx * k);
                 let nz = (pt.z - 0.05) / (rz * k);
                 nx * nx + nz * nz <= 1.0
@@ -2166,7 +2739,8 @@ impl<'a> TankBuildCtx<'a> {
                 let k = 1.0 - t * 0.22;
                 let nx = pt.x / (rx * k);
                 let nz = (pt.z - 0.02) / (rz * k);
-                (nx * nx + nz * nz <= 1.0) && (pt.x.abs() + (pt.z - 0.02).abs() * 0.55 <= rx * k * 1.25)
+                (nx * nx + nz * nz <= 1.0)
+                    && (pt.x.abs() + (pt.z - 0.02).abs() * 0.55 <= rx * k * 1.25)
             }
             TankVisualModel::M2A4 => {
                 // Высокая вертикальная 8-гранная клепаная башня M2A4 Light.
@@ -2187,6 +2761,43 @@ impl<'a> TankBuildCtx<'a> {
                     let nz = pt.z / (rz * k * 1.06);
                     nx * nx + nz * nz <= 1.0
                 }
+            }
+            TankVisualModel::M5A1Stuart => {
+                // M5A1 Stuart: подковообразная башня с удлинённой прямоугольной радионишей сзади.
+                let k = 1.0 - t * 0.10;
+                let front = if pt.z < 0.0 {
+                    (pt.x / (rx * k)).powi(2) + (pt.z / (rz * 0.85 * k)).powi(2) <= 1.0
+                } else {
+                    pt.x.abs() <= rx * k * 0.96 && pt.z <= rz * 0.82 * k
+                };
+                let radio_box = pt.z >= rz * 0.20
+                    && pt.z <= rz * 1.22
+                    && pt.x.abs() <= rx * 0.74 * k
+                    && pt.y >= th * 0.14;
+                front || radio_box
+            }
+            TankVisualModel::M8A1 => {
+                // M8A1 Scott: ОТКРЫТАЯ СВЕРХУ наклонно-гранёная рубка!
+                let k = 1.0 - t * 0.16;
+                let half_x = if pt.z < -rz * 0.12 {
+                    let u = ((-pt.z - rz * 0.12) / (rz * 0.88)).clamp(0.0, 1.0);
+                    rx * k * (1.0 - 0.30 * u)
+                } else {
+                    let u = ((pt.z.max(0.0)) / rz).clamp(0.0, 1.0);
+                    rx * k * (1.0 - 0.18 * u)
+                };
+                let in_outer =
+                    pt.x.abs() <= half_x && pt.z >= -rz * (1.0 - t * 0.12) && pt.z <= rz * 0.92 * k;
+                if !in_outer {
+                    return false;
+                }
+                if pt.y > th * 0.42 {
+                    let in_well = pt.x.abs() <= half_x * 0.54
+                        && pt.z >= -rz * 0.40
+                        && pt.z <= rz * 0.42;
+                    return !in_well;
+                }
+                true
             }
             TankVisualModel::M24Chaffee => {
                 // Обтекаемая низкая башня M24 Chaffee с вытянутым хвостом-противовесом.
@@ -2219,7 +2830,7 @@ impl<'a> TankBuildCtx<'a> {
             }
         }
 
-        // 2. Навесные, бортовые (Schürzen / задний ДТ / кормовые ниши) и крышевые детали.
+        // 2. Навесные, бортовые (Schürzen / задний ДТ / уши дальномера T29 / противовес T34) и крышевые детали.
         if let Some(m) = self.turret_addons(pt, rx, rz, th, vs) {
             return Some(m);
         }
@@ -2233,14 +2844,28 @@ impl<'a> TankBuildCtx<'a> {
             return None;
         }
 
+        // Пол открытой сверху рубки M8A1 темним для выразительности сверху.
+        if self.model == TankVisualModel::M8A1
+            && pt.y >= th * 0.34
+            && pt.y <= th * 0.43
+            && pt.x.abs() <= rx * 0.44
+            && pt.z >= -rz * 0.38
+            && pt.z <= rz * 0.40
+        {
+            return Some(self.pal.dark);
+        }
+
         // 4. Адаптивный опознавательный знак на скуле/борту башни (с учётом наклона борта!).
         let mark_z = match self.model {
             TankVisualModel::Su100 => rz * 0.16,
-            TankVisualModel::M26Pershing | TankVisualModel::Tiger2 => -rz * 0.04,
+            TankVisualModel::M26Pershing
+            | TankVisualModel::T29
+            | TankVisualModel::T32
+            | TankVisualModel::T34Usa
+            | TankVisualModel::Tiger2 => -rz * 0.04,
             _ => rz * 0.02,
         };
         let mark_scale = (th / 0.72).clamp(0.55, 1.0);
-        // Проверяем, что мы находимся на самом внешнем слое борта по горизонтали (±X):
         let outer_check = self.turret_core_inside(
             Vec3::new(pt.x + pt.x.signum() * vs * 1.15, pt.y, pt.z),
             rx,
@@ -2305,7 +2930,6 @@ impl<'a> TankBuildCtx<'a> {
             let skirt_z = rz + 0.38;
             let in_y = pt.y >= 0.08 && pt.y <= th * 0.88;
             if in_y {
-                // Боковые листы экрана и скошенные передние закрылки (капсула гарантирует 6-связность на диагонали).
                 let on_side = pt.x.abs() >= skirt_x - vs * 0.60
                     && pt.x.abs() <= skirt_x + vs * 0.60
                     && pt.z >= -rz * 0.36
@@ -2317,12 +2941,10 @@ impl<'a> TankBuildCtx<'a> {
                         Vec2::new(rx * 0.62, -rz * 0.64),
                         Vec2::new(skirt_x, -rz * 0.34),
                     ) <= vs * 0.90;
-                // Задний дуговой экран позади Gepäckkasten.
                 let on_rear = pt.z >= skirt_z - vs * 0.62
                     && pt.z <= skirt_z + vs * 0.62
                     && pt.x.abs() <= skirt_x + vs * 0.60;
                 if on_side || on_flap || on_rear {
-                    // Бортовой крест на Schürzen Pz. IV H!
                     if on_side
                         && in_tactical_mark(
                             self.team,
@@ -2335,7 +2957,6 @@ impl<'a> TankBuildCtx<'a> {
                     return Some(self.pal.hull_paint(pt, pt.y > th * 0.80));
                 }
             }
-            // Жёсткие боковые и кормовые кронштейны (от стенки башни прямо к экрану — 100% 6-связность!).
             if pt.y >= th * 0.40 && pt.y <= th * 0.58 {
                 let side_strut = pt.x.abs() >= rx * 0.72
                     && pt.x.abs() <= skirt_x + vs * 0.4
@@ -2351,9 +2972,42 @@ impl<'a> TankBuildCtx<'a> {
             }
         }
 
-        // 2. Выступающий назад башенный пулемёт ДТ в шаровой установке на корме КВ-1!
-        if self.model == TankVisualModel::Kv1
-            && pt.z >= rz * 0.86
+        // 1b. Стереоскопические «уши»-кожухи оптического дальномера на бортах башни T29!
+        if self.model == TankVisualModel::T29
+            && pt.x.abs() >= rx * 0.65
+            && pt.x.abs() <= rx + 0.32
+            && (pt.y - th * 0.60).hypot(pt.z + rz * 0.08) <= 0.145
+        {
+            if pt.z <= -rz * 0.08 - 0.075 && pt.x.abs() >= rx + 0.04 {
+                return Some(Material::TankLens);
+            }
+            return Some(if pt.x.abs() >= rx + 0.24 {
+                self.pal.dark
+            } else {
+                self.pal.hull_paint(pt, false)
+            });
+        }
+
+        // 1c. Массивный прямоугольный кормовой противовес 120-мм башни T34 (выступает за нишу).
+        if self.model == TankVisualModel::T34Usa
+            && pt.z >= rz * 0.88
+            && pt.z <= rz + 0.54
+            && pt.x.abs() <= rx * 0.58
+            && pt.y >= th * 0.22
+            && pt.y <= th * 0.90
+        {
+            return Some(if pt.z >= rz + 0.42 {
+                self.pal.dark
+            } else {
+                self.pal.hull_paint(pt, false)
+            });
+        }
+
+        // 2. Выступающий назад башенный пулемёт ДТ в шаровой установке на корме КВ-1 / ИС-1 / ИС-2!
+        if matches!(
+            self.model,
+            TankVisualModel::Kv1 | TankVisualModel::Is1 | TankVisualModel::Is2
+        ) && pt.z >= rz * 0.84
             && pt.z <= rz + 0.16
             && pt.x.hypot(pt.y - th * 0.50) <= 0.11
         {
@@ -2365,8 +3019,8 @@ impl<'a> TankBuildCtx<'a> {
             }
         }
 
-        // 3. Командирская башенка (нет у Т-34-76, уникальная высокая грибковая у МС-1, многогранная у M2A4).
-        if self.model != TankVisualModel::T34_76 {
+        // 3. Командирская башенка (нет у Т-34-76 и открытой рубки M8A1).
+        if !matches!(self.model, TankVisualModel::T34_76 | TankVisualModel::M8A1) {
             let (cup_pos, cup_r, cup_h, has_slits) = match self.model {
                 TankVisualModel::Su100 => (
                     Vec2::new(rx * 0.53, -rz * 0.05),
@@ -2375,16 +3029,24 @@ impl<'a> TankBuildCtx<'a> {
                     true,
                 ),
                 TankVisualModel::Ms1 => (Vec2::new(0.0, 0.04), rx * 0.46, 0.20, false),
-                TankVisualModel::M2A4 => (
-                    Vec2::new(0.0, rz * 0.06),
-                    rx * 0.44,
-                    0.20,
-                    true,
-                ),
+                TankVisualModel::M2A4 => (Vec2::new(0.0, rz * 0.06), rx * 0.44, 0.20, true),
                 TankVisualModel::M3Stuart => (
                     Vec2::new(-rx * 0.10, rz * 0.12),
                     rx * 0.36,
                     0.13,
+                    true,
+                ),
+                TankVisualModel::M5A1Stuart => (
+                    Vec2::new(rx * 0.20, rz * 0.12),
+                    rx * 0.28,
+                    0.10,
+                    false,
+                ),
+                TankVisualModel::T50 => (
+                    // Т-50: высокая цилиндрическая башенка со смотровыми щелями на всю крышу!
+                    Vec2::new(0.0, rz * 0.06),
+                    rx * 0.36,
+                    0.18,
                     true,
                 ),
                 TankVisualModel::Bt7 => (
@@ -2399,37 +3061,60 @@ impl<'a> TankBuildCtx<'a> {
                     0.11,
                     false,
                 ),
-                TankVisualModel::Pz3 | TankVisualModel::Pz4 | TankVisualModel::Panther | TankVisualModel::Tiger1 | TankVisualModel::Tiger2 => (
+                TankVisualModel::Pz3
+                | TankVisualModel::Pz3E
+                | TankVisualModel::Pz4A
+                | TankVisualModel::Pz4
+                | TankVisualModel::Panther
+                | TankVisualModel::Tiger1
+                | TankVisualModel::Tiger2 => (
                     Vec2::new(-rx * 0.35, rz * 0.20),
                     (rx * 0.29).clamp(0.18, 0.33),
                     (th * 0.32).clamp(0.17, 0.27),
                     true,
                 ),
-                TankVisualModel::M4A3E8 | TankVisualModel::M26Pershing | TankVisualModel::M24Chaffee => (
-                    Vec2::new(-rx * 0.28, rz * 0.14),
-                    (rx * 0.26).clamp(0.16, 0.26),
-                    (th * 0.24).clamp(0.13, 0.19),
+                TankVisualModel::M48A1 => (
+                    // M48A1: высокая массивная пулемётная башенка M1!
+                    Vec2::new(-rx * 0.14, rz * 0.18),
+                    (rx * 0.27).clamp(0.20, 0.30),
+                    0.24,
                     true,
                 ),
-                TankVisualModel::T34_85 => (
+                TankVisualModel::M4A3E8
+                | TankVisualModel::M4A1_75
+                | TankVisualModel::Jumbo76
+                | TankVisualModel::M26Pershing
+                | TankVisualModel::T29
+                | TankVisualModel::T32
+                | TankVisualModel::T34Usa
+                | TankVisualModel::M24Chaffee => (
+                    Vec2::new(-rx * 0.28, rz * 0.14),
+                    (rx * 0.25).clamp(0.16, 0.27),
+                    (th * 0.22).clamp(0.12, 0.19),
+                    true,
+                ),
+                TankVisualModel::T34_85 | TankVisualModel::Is1 | TankVisualModel::Is2 => (
                     Vec2::new(-rx * 0.34, rz * 0.18),
                     (rx * 0.27).clamp(0.18, 0.27),
                     0.16,
                     true,
                 ),
-                TankVisualModel::Kv1 => (
-                    Vec2::new(0.0, rz * 0.05),
-                    rx * 0.24,
-                    0.07,
-                    false,
+                TankVisualModel::T44 => (
+                    Vec2::new(-rx * 0.34, rz * 0.16),
+                    (rx * 0.25).clamp(0.17, 0.25),
+                    0.12,
+                    true,
                 ),
-                TankVisualModel::Is3 => (
-                    Vec2::new(-rx * 0.34, rz * 0.14),
+                TankVisualModel::Kv1 => (Vec2::new(0.0, rz * 0.05), rx * 0.24, 0.07, false),
+                TankVisualModel::Is3 | TankVisualModel::T54_46 => (
+                    Vec2::new(-rx * 0.32, rz * 0.14),
                     (rx * 0.22).clamp(0.14, 0.24),
-                    (th * 0.14).clamp(0.08, 0.12),
+                    (th * 0.15).clamp(0.08, 0.12),
                     false,
                 ),
-                TankVisualModel::T34_76 | TankVisualModel::Auto => unreachable!(),
+                TankVisualModel::T34_76 | TankVisualModel::M8A1 | TankVisualModel::Auto => {
+                    unreachable!()
+                }
             };
             let d_cup = Vec2::new(pt.x - cup_pos.x, pt.z - cup_pos.y).length();
             let in_cup = if self.model == TankVisualModel::M2A4 {
@@ -2476,7 +3161,14 @@ impl<'a> TankBuildCtx<'a> {
         // 5. Люк заряжающего справа.
         if !matches!(
             self.model,
-            TankVisualModel::T34_76 | TankVisualModel::Ms1 | TankVisualModel::Pz2C | TankVisualModel::M2A4 | TankVisualModel::M3Stuart
+            TankVisualModel::T34_76
+                | TankVisualModel::T50
+                | TankVisualModel::Ms1
+                | TankVisualModel::Pz2C
+                | TankVisualModel::M2A4
+                | TankVisualModel::M3Stuart
+                | TankVisualModel::M5A1Stuart
+                | TankVisualModel::M8A1
         ) {
             let load_x = if self.model == TankVisualModel::Su100 {
                 -rx * 0.37
@@ -2494,8 +3186,11 @@ impl<'a> TankBuildCtx<'a> {
             }
         }
 
-        // 6. Два вентиляционных грибка на корме крыши Т-34-85.
-        if self.model == TankVisualModel::T34_85 && pt.y >= th - 0.01 && pt.y <= th + 0.09 {
+        // 6. Два вентиляционных грибка на корме крыши Т-34-85 / Т-44.
+        if matches!(self.model, TankVisualModel::T34_85 | TankVisualModel::T44)
+            && pt.y >= th - 0.01
+            && pt.y <= th + 0.09
+        {
             let vent_r = (rx * 0.105).clamp(0.06, 0.10);
             for sx in [-rx * 0.27, rx * 0.27] {
                 if (pt.x - sx).hypot(pt.z - rz * 0.56) <= vent_r {
@@ -2504,7 +3199,7 @@ impl<'a> TankBuildCtx<'a> {
             }
         }
 
-        // 7. Кормовой ящик Rommelkiste / Gepäckkasten (ТОЛЬКО Pz. III, Pz. IV, Tiger I — НЕТ у Panther и Tiger II!).
+        // 7. Кормовой ящик Rommelkiste / Gepäckkasten (Pz. III H, Pz. IV H, Tiger I — НЕТ у ранних Pz.III E / Pz.IV A!).
         if matches!(
             self.model,
             TankVisualModel::Tiger1 | TankVisualModel::Pz4 | TankVisualModel::Pz3
@@ -2525,7 +3220,7 @@ impl<'a> TankBuildCtx<'a> {
             }
         }
 
-        // 8. Бортовые мортирки 3+3 на Tiger I и запасные траки на бортах Tiger I / Tiger II / Pz. IV / M4A3E8 / M26!
+        // 8. Бортовые мортирки 3+3 на Tiger I и запасные траки на бортах башни.
         if self.model == TankVisualModel::Tiger1 {
             let smoke_ext = (rx * 0.11).clamp(0.06, 0.12);
             if pt.y >= th * 0.45
@@ -2543,7 +3238,9 @@ impl<'a> TankBuildCtx<'a> {
             TankVisualModel::Tiger1
                 | TankVisualModel::Tiger2
                 | TankVisualModel::M4A3E8
+                | TankVisualModel::Jumbo76
                 | TankVisualModel::M26Pershing
+                | TankVisualModel::T32
         ) && pt.y >= 0.16
             && pt.y <= th * 0.80
             && pt.z >= rz * 0.04
@@ -2562,13 +3259,21 @@ impl<'a> TankBuildCtx<'a> {
             }
         }
 
-        // 9. Зенитный пулемёт на башнях США (M4A3E8, M26, M24, M3) и ДШК на ИС-3.
+        // 9. Зенитный пулемёт на башнях США / M48A1 и ДШК на ИС-2 / ИС-3.
         if matches!(
             self.model,
-            TankVisualModel::M4A3E8
+            TankVisualModel::M4A1_75
+                | TankVisualModel::M4A3E8
+                | TankVisualModel::Jumbo76
                 | TankVisualModel::M26Pershing
+                | TankVisualModel::M48A1
+                | TankVisualModel::T29
+                | TankVisualModel::T32
+                | TankVisualModel::T34Usa
                 | TankVisualModel::M24Chaffee
                 | TankVisualModel::M3Stuart
+                | TankVisualModel::M5A1Stuart
+                | TankVisualModel::Is2
                 | TankVisualModel::Is3
         ) {
             let mount = Vec3::new(rx * 0.28, th, rz * 0.42);
@@ -2590,10 +3295,16 @@ impl<'a> TankBuildCtx<'a> {
             }
         }
 
-        // 10. Поручни на бортах башни Т-34-76, Т-34-85, ИС-3.
+        // 10. Поручни на бортах башни советских танков.
         if matches!(
             self.model,
-            TankVisualModel::T34_76 | TankVisualModel::T34_85 | TankVisualModel::Is3
+            TankVisualModel::T34_76
+                | TankVisualModel::T34_85
+                | TankVisualModel::T44
+                | TankVisualModel::T54_46
+                | TankVisualModel::Is1
+                | TankVisualModel::Is2
+                | TankVisualModel::Is3
         ) && pt.x.abs() >= rx * 0.64
             && pt.x.abs() <= rx * 0.94
             && (pt.y - th * 0.50).abs() <= 0.045
@@ -2603,15 +3314,18 @@ impl<'a> TankBuildCtx<'a> {
             return Some(Material::TankSteel);
         }
 
-        // 11. База антенны на корме крыши.
+        // 11. База антенны на корме крыши (для открытой M8A1 строго на сплошной задней стенке!).
         let ant = match self.model {
-            TankVisualModel::Is3 => Vec2::new(-rx * 0.22, rz * 0.44),
-            TankVisualModel::T34_85 | TankVisualModel::T34_76 => Vec2::new(-rx * 0.34, rz * 0.58),
+            TankVisualModel::Is3 | TankVisualModel::T54_46 => Vec2::new(-rx * 0.22, rz * 0.44),
+            TankVisualModel::T34_85 | TankVisualModel::T34_76 | TankVisualModel::T50 => {
+                Vec2::new(-rx * 0.34, rz * 0.58)
+            }
+            TankVisualModel::M8A1 => Vec2::new(0.0, rz * 0.64),
             _ => Vec2::new(-rx * 0.44, rz * 0.62),
         };
         let ant_h = (th * 0.48).clamp(0.18, 0.32);
         if (pt.x - ant.x).hypot(pt.z - ant.y) <= (vs * 0.74).max(0.06)
-            && pt.y >= th - vs * 0.8
+            && pt.y >= th - vs * 1.2
             && pt.y <= th + ant_h
         {
             return Some(self.pal.dark);
@@ -2639,7 +3353,7 @@ impl<'a> TankBuildCtx<'a> {
             return None;
         }
 
-        // 2. Спаренный пулемёт MG34 справа от 20мм автопушки у Pz. II Ausf. C!
+        // 2. Спаренные пулемёты (один у Pz. II C, сдвоенные MG34 у ранней Pz. III Ausf. E).
         if self.model == TankVisualModel::Pz2C {
             let coax_x = 0.16_f32;
             let coax_r = (gs * 1.15).max(0.046);
@@ -2649,11 +3363,45 @@ impl<'a> TankBuildCtx<'a> {
             {
                 return Some(Material::TankSteel);
             }
+        } else if self.model == TankVisualModel::Pz3E {
+            let coax_r = (gs * 1.08).max(0.043);
+            for coax_x in [0.12_f32, 0.21_f32] {
+                if pt.z <= 0.06
+                    && pt.z >= -bl * 0.26
+                    && (pt.x - coax_x).hypot(pt.y) <= coax_r
+                {
+                    return Some(Material::TankSteel);
+                }
+            }
         }
 
-        // 3. Дульный тормоз по историческому типу (щелевой американский/советский или двухкамерный немецкий).
+        // 3. Дульный тормоз по историческому типу.
         if self.p.has_muzzle_brake() {
             match self.model {
+                TankVisualModel::M48A1 => {
+                    // Знаменитый Т-образный дульный тормоз-отражатель 90мм пушки M41.
+                    let brake_len = (bl * 0.068).clamp(0.24, 0.34);
+                    if pt.z >= -bl && pt.z <= -bl + brake_len {
+                        let cross_z = -bl + brake_len * 0.42;
+                        if pt.z <= cross_z {
+                            if pt.x.abs() <= br * 2.55 && pt.y.abs() <= br * 1.18 {
+                                return Some(self.pal.dark);
+                            }
+                        } else {
+                            let side_slot = pt.z >= cross_z + gs * 0.4 && pt.z <= -bl + brake_len * 0.80;
+                            if side_slot && pt.x.abs() >= br * 0.90 && pt.y.abs() <= br * 0.62 {
+                                return None;
+                            }
+                            if r_xy <= br * 1.52 {
+                                return Some(if side_slot {
+                                    Material::TankSteel
+                                } else {
+                                    self.pal.dark
+                                });
+                            }
+                        }
+                    }
+                }
                 TankVisualModel::M4A3E8 => {
                     // Однокамерный цилиндрический перфорированный тормоз 76мм M1A2.
                     let brake_len = (bl * 0.065).clamp(0.22, 0.30);
@@ -2668,13 +3416,13 @@ impl<'a> TankBuildCtx<'a> {
                     }
                 }
                 _ => {
-                    // Двухкамерный плоский/грушевидный тормоз (Panther, Tiger I/II, Pz. IV H, M26, ИС-3).
-                    let brake_len = (bl * 0.082).clamp(0.26, 0.42);
+                    // Двухкамерный плоский/грушевидный тормоз (Panther, Tiger I/II, Pz. IV H, M26, ИС-2/3, T29/T32/T34).
+                    let brake_len = (bl * 0.082).clamp(0.26, 0.44);
                     if pt.z >= -bl && pt.z <= -bl + brake_len {
-                        let rx_b = if self.model == TankVisualModel::Panther {
-                            br * 1.85
-                        } else {
-                            br * 1.95
+                        let rx_b = match self.model {
+                            TankVisualModel::Panther => br * 1.85,
+                            TankVisualModel::Is2 | TankVisualModel::T34Usa => br * 2.02,
+                            _ => br * 1.95,
                         };
                         let ry_b = br * 1.42;
                         let in_slot_1 =
@@ -2701,15 +3449,33 @@ impl<'a> TankBuildCtx<'a> {
                 }
             }
         } else {
-            let ring_len = (bl * 0.04).clamp(0.08, 0.16);
+            let ring_len = match self.model {
+                TankVisualModel::T54_46 => (bl * 0.048).clamp(0.14, 0.22),
+                _ => (bl * 0.04).clamp(0.08, 0.16),
+            };
             if pt.z >= -bl && pt.z <= -bl + ring_len && r_xy <= (br * 1.18).max(gs * 2.2) {
                 return Some(Material::TankSteel);
             }
         }
 
-        // 4. Откатный кожух / броневое корыто отката (Т-34-76, КВ-1, M24 Chaffee) или казённая муфта.
+        // 3.5. Эжектор (bore evacuator) на длинноствольных M48A1 и T34.
+        let evac_range = match self.model {
+            TankVisualModel::M48A1 => Some((-bl * 0.70, -bl * 0.54, br * 1.56)),
+            TankVisualModel::T34Usa => Some((-bl * 0.60, -bl * 0.45, br * 1.54)),
+            _ => None,
+        };
+        if let Some((z0, z1, r_evac)) = evac_range
+            && pt.z >= z0
+            && pt.z <= z1
+            && r_xy <= r_evac
+        {
+            let cap = (pt.z - z0).abs() <= gs * 1.1 || (pt.z - z1).abs() <= gs * 1.1;
+            return Some(if cap { self.pal.dark } else { Material::TankSteel });
+        }
+
+        // 4. Откатный кожух / броневое корыто отката (Т-34-76, КВ-1, Т-50, Pz. IV A, M24) и казённая муфта.
         if matches!(self.model, TankVisualModel::T34_76 | TankVisualModel::Kv1) {
-            // Знаменитый нижний броневой жёлоб-корыто отката под стволом 76мм Ф-34 / ЗИС-5!
+            // Знаменитый нижний броневой жёлоб-корыто отката под стволом 76мм Ф-34 / ЗИС-5.
             if pt.z >= -0.66
                 && pt.z <= 0.12
                 && pt.x.abs() <= br * 1.45
@@ -2718,6 +3484,15 @@ impl<'a> TankBuildCtx<'a> {
             {
                 return Some(self.pal.hull_paint(pt, false));
             }
+        } else if self.model == TankVisualModel::T50
+            && pt.z >= -0.44
+            && pt.z <= 0.12
+            && pt.x.abs() <= br * 1.42
+            && pt.y >= -br * 1.05
+            && pt.y <= br * 2.10
+        {
+            // Верхний накатник 45мм пушки 20-К на Т-50.
+            return Some(self.pal.hull_paint(pt, false));
         } else if self.model == TankVisualModel::M24Chaffee
             && pt.z >= -0.48
             && pt.z <= 0.10
@@ -2729,31 +3504,51 @@ impl<'a> TankBuildCtx<'a> {
         }
 
         let sleeve_len = match self.model {
+            TankVisualModel::Pz4A => (bl * 0.40).clamp(0.64, 0.78),
             TankVisualModel::Tiger1 | TankVisualModel::Tiger2 | TankVisualModel::Panther => {
                 (bl * 0.14).clamp(0.24, 0.62)
             }
-            TankVisualModel::Pz2C | TankVisualModel::M2A4 | TankVisualModel::M3Stuart | TankVisualModel::Ms1 => {
-                (bl * 0.22).clamp(0.20, 0.45)
-            }
+            TankVisualModel::Pz2C
+            | TankVisualModel::Pz3E
+            | TankVisualModel::M2A4
+            | TankVisualModel::M3Stuart
+            | TankVisualModel::M5A1Stuart
+            | TankVisualModel::Ms1 => (bl * 0.22).clamp(0.20, 0.45),
             _ => (bl * 0.17).clamp(0.22, 0.68),
         };
-        if pt.z >= -sleeve_len && pt.z <= 0.0 && r_xy <= br * 1.45 {
+        let sleeve_r = if self.model == TankVisualModel::Pz4A {
+            br * 1.62
+        } else {
+            br * 1.45
+        };
+        if pt.z >= -sleeve_len && pt.z <= 0.0 && r_xy <= sleeve_r {
             return Some(self.pal.dark);
         }
 
         // 5. Маска орудия по историческому архетипу!
         let mantlet = match self.model {
             TankVisualModel::Panther => {
-                // Цилиндрическая «катушка» Topfblende поперёк лба башни Panther!
+                // Цилиндрическая «катушка» Topfblende поперёк лба башни Panther.
                 let rad = (th * 0.255).clamp(0.16, 0.22);
                 pt.x.abs() <= rx * 0.46 && pt.y.hypot(pt.z + 0.02) <= rad
             }
             TankVisualModel::Tiger2 => {
-                // Узкая литая коническая маска «Saukopf» («свиное рыло») Tiger II!
+                // Узкая литая коническая маска «Saukopf» Tiger II.
                 if pt.z >= -0.44 && pt.z <= 0.22 {
                     let u = ((0.22 - pt.z) / 0.66).clamp(0.0, 1.0);
                     let r_max = (th * 0.25).clamp(0.18, 0.23) * (1.0 - 0.42 * u);
                     pt.x.abs() <= r_max * 1.35 && pt.y.abs() <= r_max && pt.x.hypot(pt.y * 1.15) <= r_max * 1.38
+                } else {
+                    false
+                }
+            }
+            TankVisualModel::T54_46 => {
+                // Литая коническая «свиное рыло» маска 100мм Д-10Т на Т-54 (1946).
+                if pt.z >= -0.34 && pt.z <= 0.24 {
+                    let u = ((0.24 - pt.z) / 0.58).clamp(0.0, 1.0);
+                    let rx_m = (rx * 0.34).clamp(0.24, 0.36) * (1.0 - 0.34 * u);
+                    let ry_m = (th * 0.30).clamp(0.16, 0.22) * (1.0 - 0.28 * u);
+                    (pt.x / rx_m).powi(2) + (pt.y / ry_m).powi(2) <= 1.05
                 } else {
                     false
                 }
@@ -2780,7 +3575,7 @@ impl<'a> TankBuildCtx<'a> {
                 false
             }
             TankVisualModel::Pz4 => {
-                // Угловатая двойная маска KwK 40 (плоская основа + выступающий вперёд литой конус).
+                // Угловатая двойная маска KwK 40 L/48.
                 let plate = pt.x.abs() <= rx * 0.44
                     && pt.y.abs() <= th * 0.24
                     && pt.z >= -0.18
@@ -2790,6 +3585,13 @@ impl<'a> TankBuildCtx<'a> {
                     && pt.x.abs() <= 0.18
                     && pt.y.abs() <= 0.14;
                 plate || collar
+            }
+            TankVisualModel::Pz4A => {
+                // Ранний узкий роторный щиток под короткий 75мм окурок KwK 37 L/24.
+                pt.x.abs() <= rx * 0.38
+                    && pt.y.abs() <= th * 0.24
+                    && pt.z >= -0.18
+                    && pt.z <= 0.20
             }
             TankVisualModel::Pz3 => {
                 // Внутренняя маска + разнесённая наружная накладка Vorpanzer.
@@ -2803,20 +3605,54 @@ impl<'a> TankBuildCtx<'a> {
                     && pt.z <= -0.14;
                 inner || spaced
             }
+            TankVisualModel::Pz3E => {
+                // Ранний коробчатый щиток под 37мм + спаренные MG34.
+                pt.x >= -0.20 && pt.x <= 0.28 && pt.y.abs() <= 0.14 && pt.z >= -0.16 && pt.z <= 0.20
+            }
             TankVisualModel::Pz2C => {
                 // Сдвинутый щит Pz. II C (держит и 20мм ствол, и спаренный MG34).
                 pt.x >= -0.20 && pt.x <= 0.26 && pt.y.abs() <= 0.13 && pt.z >= -0.14 && pt.z <= 0.18
             }
-            TankVisualModel::M4A3E8 | TankVisualModel::M26Pershing => {
-                // Выгнутый широкий щит-ротор M62 / M67!
-                let mx = if self.model == TankVisualModel::M26Pershing {
-                    rx * 0.52
-                } else {
-                    rx * 0.48
+            TankVisualModel::M48A1 => {
+                // Выпуклая овальная маска M87 в брезентовом кожухе + обжимной воротник.
+                let mx = (rx * 0.41).clamp(0.32, 0.46);
+                let my = (th * 0.30).clamp(0.18, 0.25);
+                let oval = pt.z >= -0.24
+                    && pt.z <= 0.26
+                    && (pt.x / mx).powi(2) + (pt.y / my).powi(2) <= 1.05;
+                let collar = pt.z >= -0.34 && pt.z <= -0.12 && r_xy <= br * 1.85;
+                oval || collar
+            }
+            TankVisualModel::Jumbo76 => {
+                // Массивная 177мм монолитная бронемаска M4A3E2 Jumbo.
+                let mx = (rx * 0.56).clamp(0.42, 0.54);
+                let my = (th * 0.34).clamp(0.20, 0.27);
+                let front_curve = -0.36 + (pt.x / mx).powi(2) * 0.08 + (pt.y / my).powi(2) * 0.06;
+                pt.x.abs() <= mx && pt.y.abs() <= my && pt.z >= front_curve && pt.z <= 0.24
+            }
+            TankVisualModel::T29 | TankVisualModel::T32 | TankVisualModel::T34Usa => {
+                // Сверхтолстая широкая литая бронемаска американских ТТ T29 / T32 / T34.
+                let mx = (rx * 0.50).clamp(0.46, 0.58);
+                let my = (th * 0.32).clamp(0.22, 0.29);
+                let front_curve = -0.34 + (pt.x / mx).powi(2) * 0.09 + (pt.y / my).powi(2) * 0.07;
+                pt.x.abs() <= mx && pt.y.abs() <= my && pt.z >= front_curve && pt.z <= 0.26
+            }
+            TankVisualModel::M4A1_75 | TankVisualModel::M4A3E8 | TankVisualModel::M26Pershing => {
+                // Узкий ранний ротор M34 (M4A1) против широких выгнутых щитов M62/M67.
+                let mx = match self.model {
+                    TankVisualModel::M26Pershing => rx * 0.52,
+                    TankVisualModel::M4A3E8 => rx * 0.48,
+                    _ => rx * 0.36,
                 };
                 let my = (th * 0.28).clamp(0.16, 0.22);
                 let curve = -0.24 + (pt.y / my).powi(2) * 0.10;
                 pt.x.abs() <= mx && pt.y.abs() <= my && pt.z >= curve && pt.z <= 0.22
+            }
+            TankVisualModel::M8A1 => {
+                // Крупный угловатый выступающий вперёд щит 75мм орудия M8A1.
+                let mx = (rx * 0.44).clamp(0.24, 0.34);
+                let my = (th * 0.34).clamp(0.15, 0.20);
+                pt.x.abs() <= mx && pt.y.abs() <= my && pt.z >= -0.32 && pt.z <= 0.22
             }
             TankVisualModel::Su100 => {
                 let ex = (rx * 0.353).clamp(0.22, 0.38);
@@ -2824,7 +3660,19 @@ impl<'a> TankBuildCtx<'a> {
                 let ez = (rz * 0.288).clamp(0.20, 0.36);
                 (pt.x / ex).powi(2) + (pt.y / ey).powi(2) + ((pt.z + 0.02) / ez).powi(2) <= 1.0
             }
-            TankVisualModel::T34_85 | TankVisualModel::T34_76 | TankVisualModel::Kv1 | TankVisualModel::Bt7 => {
+            TankVisualModel::Is1 | TankVisualModel::Is2 => {
+                // Широкий обтекаемый «свиной лоб» масок Д-5Т / Д-25Т серии ИС.
+                let mx = (rx * 0.42).clamp(0.32, 0.44);
+                let my = (th * 0.30).clamp(0.18, 0.25);
+                let curve = -0.28 + (pt.x / mx).powi(2) * 0.08 + (pt.y / my).powi(2) * 0.08;
+                pt.z >= curve && pt.z <= 0.24 && pt.x.abs() <= mx && pt.y.abs() <= my
+            }
+            TankVisualModel::T34_85
+            | TankVisualModel::T44
+            | TankVisualModel::T34_76
+            | TankVisualModel::Kv1
+            | TankVisualModel::T50
+            | TankVisualModel::Bt7 => {
                 let ex = (rx * 0.35).clamp(0.20, 0.34);
                 let ey = (th * 0.30).clamp(0.15, 0.23);
                 let ez = (rz * 0.26).clamp(0.18, 0.30);
@@ -2835,10 +3683,15 @@ impl<'a> TankBuildCtx<'a> {
                 let my = (th * 0.328).clamp(0.15, 0.22);
                 pt.z >= -0.30 && pt.z <= 0.24 && pt.x.abs() <= mx && pt.y.abs() <= my
             }
-            TankVisualModel::M2A4 | TankVisualModel::M3Stuart | TankVisualModel::M24Chaffee | TankVisualModel::Ms1 | TankVisualModel::Auto => {
-                let mx = (rx * 0.34).clamp(0.16, 0.28);
+            TankVisualModel::M2A4
+            | TankVisualModel::M3Stuart
+            | TankVisualModel::M5A1Stuart
+            | TankVisualModel::M24Chaffee
+            | TankVisualModel::Ms1
+            | TankVisualModel::Auto => {
+                let mx = (rx * 0.36).clamp(0.17, 0.28);
                 let my = (th * 0.29).clamp(0.12, 0.19);
-                pt.z >= -0.20 && pt.z <= 0.20 && pt.x.abs() <= mx && pt.y.abs() <= my
+                pt.z >= -0.22 && pt.z <= 0.20 && pt.x.abs() <= mx && pt.y.abs() <= my
             }
         };
         if mantlet {
@@ -3005,16 +3858,16 @@ mod tests {
     }
 
     #[test]
-    fn all_fifteen_tanks_build_distinct_detailed_models_and_enemy_camo() {
+    fn all_thirty_tanks_build_distinct_detailed_models_and_enemy_camo() {
         let tanks = available_tanks();
-        assert_eq!(tanks.len(), 18);
+        assert_eq!(tanks.len(), 30);
         let mut counts = Vec::new();
         for t in &tanks {
             let parts = build_tank_parts_for_team(&t.profile, Team::Player);
             let h = parts.hull.count_solid();
             let tr = parts.turret.count_solid();
             let b = parts.barrel.count_solid();
-            assert!(h > 1_000 && tr > 220 && b > 140, "{}: {h}/{tr}/{b}", t.id);
+            assert!(h > 1_000 && tr > 200 && b > 140, "{}: {h}/{tr}/{b}", t.id);
 
             let hm = mesh_grid_ao(&parts.hull);
             let tm = mesh_grid_ao(&parts.turret);
@@ -3035,10 +3888,12 @@ mod tests {
         }
 
         let ms1 = counts.iter().find(|c| c.0 == "ms_1").unwrap();
-        let m24 = counts.iter().find(|c| c.0 == "m24_chaffee").unwrap();
+        let m5a1 = counts.iter().find(|c| c.0 == "m5a1_stuart").unwrap();
         let tiger = counts.iter().find(|c| c.0 == "tiger_1").unwrap();
-        assert!(tiger.1 > m24.1 && tiger.3 > m24.3);
+        let t34_usa = counts.iter().find(|c| c.0 == "t34_usa").unwrap();
+        assert!(tiger.1 > m5a1.1 && tiger.3 > m5a1.3);
         assert!(tiger.1 > ms1.1 && tiger.2 > ms1.2 && tiger.3 > ms1.3);
+        assert!(t34_usa.1 > tiger.1 && t34_usa.3 > tiger.3);
 
         let tiger_parts = build_tank_parts(&load_tank_spec("tiger_1").unwrap().profile);
         let t34_parts = build_tank_parts(&load_tank_spec("t34_85").unwrap().profile);
@@ -3113,6 +3968,53 @@ mod tests {
         assert!(!has_material(&kv1_p.hull, Material::TankRubber), "КВ-1 имеет цельностальные катки");
     }
 
+    #[test]
+    fn v15_tanks_have_authentic_distinct_silhouettes() {
+        let m8a1 = load_tank_spec("m8a1").unwrap();
+        let m5a1 = load_tank_spec("m5a1_stuart").unwrap();
+        let m8_p = build_tank_parts(&m8a1.profile);
+        let m5_p = build_tank_parts(&m5a1.profile);
+
+        // Открытая рубка M8A1: верх центра рубки пустой, в отличие от закрытой башни M5A1.
+        let m8_open_v = m8_p.turret.world_to_voxel(Vec3::new(0.0, m8a1.profile.turret_height * 0.78, -0.05));
+        let m5_roof_v = m5_p.turret.world_to_voxel(Vec3::new(0.0, m5a1.profile.turret_height * 0.88, -0.05));
+        assert!(!m8_p.turret.is_solid(m8_open_v), "рубку M8A1 делаем открытой сверху");
+        assert!(m5_p.turret.is_solid(m5_roof_v), "крыша башни M5A1 должна быть закрытой");
+
+        // T29 шире T34 за счёт «ушей» дальномера, а T34 длиннее в корму за счёт противовеса башни.
+        let t29 = load_tank_spec("t29").unwrap();
+        let t34 = load_tank_spec("t34_usa").unwrap();
+        let t29_p = build_tank_parts(&t29.profile);
+        let t34_p = build_tank_parts(&t34.profile);
+        let t29_ext = grid_solid_extent_m(&t29_p.turret);
+        let t34_ext = grid_solid_extent_m(&t34_p.turret);
+        assert!(
+            t29_ext.x > t34_ext.x + 0.20,
+            "дальномерные «уши» T29 должны быть шире T34: {} vs {}",
+            t29_ext.x,
+            t34_ext.x
+        );
+        assert!(
+            grid_z_bounds_m(&t34_p.turret).1 > grid_z_bounds_m(&t29_p.turret).1 + 0.15,
+            "противовес башни T34 должен выступать дальше назад"
+        );
+
+        // Pz. IV A — короткий окурок 75мм L/24 и без бортовых экранов башни (уже Pz. IV H).
+        let pz4a = load_tank_spec("pz_4_a").unwrap();
+        let pz4h = load_tank_spec("pz_4").unwrap();
+        let pz4a_p = build_tank_parts(&pz4a.profile);
+        let pz4h_p = build_tank_parts(&pz4h.profile);
+        assert!(grid_solid_extent_m(&pz4h_p.turret).x > grid_solid_extent_m(&pz4a_p.turret).x + 0.16);
+        assert!(grid_solid_extent_m(&pz4h_p.barrel).z > grid_solid_extent_m(&pz4a_p.barrel).z + 1.5);
+
+        // Т-54(46г) приземистее башни ИС-2 и имеет округлый «сковородочный» силуэт.
+        let t54 = load_tank_spec("t_54_46").unwrap();
+        let is2 = load_tank_spec("is_2").unwrap();
+        let t54_p = build_tank_parts(&t54.profile);
+        let is2_p = build_tank_parts(&is2.profile);
+        assert!(grid_solid_extent_m(&is2_p.hull).y > grid_solid_extent_m(&t54_p.hull).y + 0.15);
+    }
+
     fn connected_components(grid: &VoxelGrid) -> Vec<Vec<IVec3>> {
         let d = grid.dims.as_ivec3();
         let total = (d.x * d.y * d.z) as usize;
@@ -3163,7 +4065,7 @@ mod tests {
     }
 
     #[test]
-    fn all_fifteen_tanks_have_no_floating_disconnected_voxels() {
+    fn all_thirty_tanks_have_no_floating_disconnected_voxels() {
         let mut issues = Vec::new();
         for t in available_tanks() {
             let parts = build_tank_parts_for_team(&t.profile, Team::Player);

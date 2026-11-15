@@ -163,17 +163,36 @@ pub fn turret_plate_specs(spec: &TankSpec) -> Vec<TankPlateDesc> {
 
     let front_slope_deg: f32 = match p.visual_model {
         TankVisualModel::Su100 => 50.0,
-        TankVisualModel::Is3 => 32.0,
-        TankVisualModel::M26Pershing | TankVisualModel::T34_85 | TankVisualModel::T34_76 => 22.0,
-        TankVisualModel::M4A3E8 | TankVisualModel::M24Chaffee | TankVisualModel::Bt7 => 20.0,
+        TankVisualModel::Is3 | TankVisualModel::T54_46 | TankVisualModel::M48A1 => 32.0,
+        TankVisualModel::M26Pershing
+        | TankVisualModel::T34_85
+        | TankVisualModel::T34_76
+        | TankVisualModel::Is1
+        | TankVisualModel::Is2
+        | TankVisualModel::T44 => 22.0,
+        TankVisualModel::M4A3E8
+        | TankVisualModel::M4A1_75
+        | TankVisualModel::Jumbo76
+        | TankVisualModel::T29
+        | TankVisualModel::T32
+        | TankVisualModel::T34Usa
+        | TankVisualModel::M24Chaffee
+        | TankVisualModel::M8A1
+        | TankVisualModel::T50
+        | TankVisualModel::Bt7 => 20.0,
         TankVisualModel::Panther => 18.0,
         TankVisualModel::Tiger2 => 10.0,
-        TankVisualModel::Tiger1 | TankVisualModel::Pz4 | TankVisualModel::Pz3 | TankVisualModel::Kv1 => {
-            8.0
-        }
-        TankVisualModel::Pz2C | TankVisualModel::Ms1 | TankVisualModel::M2A4 | TankVisualModel::M3Stuart => {
-            12.0
-        }
+        TankVisualModel::Tiger1
+        | TankVisualModel::Pz4
+        | TankVisualModel::Pz4A
+        | TankVisualModel::Pz3
+        | TankVisualModel::Pz3E
+        | TankVisualModel::Kv1 => 8.0,
+        TankVisualModel::Pz2C
+        | TankVisualModel::Ms1
+        | TankVisualModel::M2A4
+        | TankVisualModel::M3Stuart
+        | TankVisualModel::M5A1Stuart => 12.0,
         TankVisualModel::Auto => match p.turret_shape {
             TurretShape::FixedCasemate => 50.0,
             TurretShape::RoundedDome => 32.0,
@@ -340,9 +359,9 @@ mod tests {
     }
 
     #[test]
-    fn all_fifteen_tanks_produce_valid_hull_and_turret_plates() {
+    fn all_thirty_tanks_produce_valid_hull_and_turret_plates() {
         let tanks = available_tanks();
-        assert_eq!(tanks.len(), 18);
+        assert_eq!(tanks.len(), 30);
         for spec in &tanks {
             let hull = hull_plate_specs(spec);
             let turret = turret_plate_specs(spec);

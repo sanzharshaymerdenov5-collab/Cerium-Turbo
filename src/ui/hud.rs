@@ -183,7 +183,7 @@ pub fn setup_hud(
     commands.insert_resource(bounds.clone());
 
     let initial_caliber = tank_spec.as_ref().map_or(37.0, |s| s.shell.caliber_mm);
-    let initial_name = tank_spec.as_ref().map_or("МС-1 (Т-18)", |s| s.name.as_str());
+    let initial_name = tank_spec.as_ref().map_or("МС-1", |s| s.name.as_str());
 
     // Рамка снайперского прицела и оптическая сетка (спавним первой, чтобы не перекрывать HUD).
     commands
@@ -538,7 +538,7 @@ pub fn setup_hud(
                     score.spawn((
                         HudText::TeamStrip,
                         Text::new(format!(
-                            "СОЮЗ ■ ■ ■ ■ ■  |  {}  •  v1.4.2  |  ■ ■ ■ ■ ■ ВРАГ",
+                            "СОЮЗ ■ ■ ■ ■ ■  |  {}  •  v1.5  |  ■ ■ ■ ■ ■ ВРАГ",
                             map_spec.name
                         )),
                         TextFont::from_font_size(13.0),
@@ -1496,9 +1496,9 @@ pub fn update_hud(
         .collect::<Vec<_>>()
         .join(" ");
     let team_strip_str = if enemy_total == 0 {
-        format!("СОЮЗ {ally_icons}  |  {map_title} ({mode_short})  •  v1.4.2  |  МИШЕНИ")
+        format!("СОЮЗ {ally_icons}  |  {map_title} ({mode_short})  •  v1.5  |  МИШЕНИ")
     } else {
-        format!("СОЮЗ {ally_icons}  |  {map_title} ({mode_short})  •  v1.4.2  |  {enemy_icons} ВРАГ")
+        format!("СОЮЗ {ally_icons}  |  {map_title} ({mode_short})  •  v1.5  |  {enemy_icons} ВРАГ")
     };
 
     let controls_str = format!(
@@ -2252,7 +2252,7 @@ mod tests {
             .find(|(t, _)| **t == HudText::TeamStrip)
             .map(|(_, txt)| txt.0.clone())
             .expect("TeamStrip");
-        assert!(strip.contains("v1.4.2"), "ожидается v1.4.2: {strip}");
+        assert!(strip.contains("v1.5"), "ожидается v1.5: {strip}");
     }
 
     #[test]

@@ -465,10 +465,10 @@ mod tests {
     #[test]
     fn penetration_indicator_classifies_green_yellow_and_red() {
         let spec = load_tank_spec("t34_85").unwrap();
-        // На 100 м пробитие 130 мм.
-        assert_eq!(classify_penetration(&spec.shell, 100.0, 45.0, 0.0), PenIndicator::Green);
-        assert_eq!(classify_penetration(&spec.shell, 100.0, 125.0, 0.0), PenIndicator::Yellow);
-        assert_eq!(classify_penetration(&spec.shell, 100.0, 200.0, 0.0), PenIndicator::Red);
+        let pen = penetration_at(&spec.shell, 100.0);
+        assert_eq!(classify_penetration(&spec.shell, 100.0, pen * 0.35, 0.0), PenIndicator::Green);
+        assert_eq!(classify_penetration(&spec.shell, 100.0, pen * 0.98, 0.0), PenIndicator::Yellow);
+        assert_eq!(classify_penetration(&spec.shell, 100.0, pen * 1.45, 0.0), PenIndicator::Red);
         // Угол 75° -> гарантированный рикошет -> красный.
         assert_eq!(classify_penetration(&spec.shell, 100.0, 10.0, 75.0), PenIndicator::Red);
     }
@@ -519,7 +519,7 @@ mod tests {
             .id();
         app.update();
 
-        // Пробитие кормы -> удар по двигателю + снижение общего ХП на 180.
+        // Пробитие кормы -> удар по двигателю + снижение общего ХП на `arcade_damage`.
         app.world_mut().write_message(ArmorImpactMessage {
             plate_entity: enemy,
             owner_tank: Some(enemy),
@@ -542,14 +542,18 @@ mod tests {
             let h = app.world().get::<TankHealth>(enemy).unwrap();
             let mods = app.world().get::<TankModules>(enemy).unwrap();
             let c = app.world().get::<TankCombat>(enemy).unwrap();
-            assert!((h.hp - (spec.max_hp - 180.0)).abs() < 1e-2, "hp={}", h.hp);
+            assert!(
+                (h.hp - (spec.max_hp - spec.shell.arcade_damage)).abs() < 1e-2,
+                "hp={}",
+                h.hp
+            );
             assert_eq!(mods.state(ModuleKind::Engine), ModuleState::Damaged);
             assert!(c.alive);
             assert!((c.speed_mult - 0.55).abs() < 1e-2);
         }
 
-        // Два попадания по боеукладке -> состояние Destroyed -> детонация (HP -> 0, alive=false).
-        for _ in 0..2 {
+        // Несколько прямых пробитий по боеукладке -> состояние Destroyed -> детонация (HP -> 0, alive=false).
+        for _ in 0..3 {
             app.world_mut().write_message(ArmorImpactMessage {
                 plate_entity: enemy,
                 owner_tank: Some(enemy),

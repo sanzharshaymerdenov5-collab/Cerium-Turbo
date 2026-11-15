@@ -1,7 +1,7 @@
 (
     id: "ms_1",
-    name: "МС-1 (Т-18)",
-    nation: "СССР",
+    name: "МС-1",
+    nation: "СССР (ЛТ)",
     nation_id: Ussr,
     tier: 1,
     tank_class: Light,
