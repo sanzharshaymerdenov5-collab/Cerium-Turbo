@@ -19,10 +19,11 @@ pub use spawn::{
     TankRoot, TankState, TurretPivot, spawn_preview_tank, spawn_tank,
 };
 pub use spec::{
-    ArmorScheme, ArmorZone, BT_7_RON, HullShape, IS_3_RON, M24_CHAFFEE_RON, M26_PERSHING_RON,
-    M2A4_RON, M3_STUART_RON, M4A3E8_RON, MS_1_RON, Nation, PANTHER_RON, PZ_1_RON, PZ_3_RON,
-    PZ_4_RON, ProceduralTankProfile, SU_100_RON, T34_85_RON, TIGER_1_RON, TankClass, TankSpec,
-    TurretShape, VoxelVisualSource, available_tanks, load_tank_spec,
+    ArmorScheme, ArmorZone, BT_7_RON, HullShape, IS_3_RON, KV_1_RON, M24_CHAFFEE_RON,
+    M26_PERSHING_RON, M2A4_RON, M3_STUART_RON, M4A3E8_RON, MS_1_RON, Nation, PANTHER_RON,
+    PZ_2_C_RON, PZ_3_RON, PZ_4_RON, ProceduralTankProfile, SU_100_RON, T34_76_RON, T34_85_RON,
+    TIGER_1_RON, TIGER_2_RON, TankClass, TankSpec, TurretShape, VoxelVisualSource, available_tanks,
+    load_tank_spec,
 };
 
 pub struct TankPlugin;

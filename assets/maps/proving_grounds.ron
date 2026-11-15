@@ -60,7 +60,7 @@
         (name: "250м • 45мм @ 73° (рикошет)", pos_xz: (11.0, -135.0), thickness_mm: 45.0, slope_deg: 73.0, size_xy: (3.2, 2.4)),
     ],
     ally_spawns: [
-        (pos_xz: (-48.0, 148.0), yaw_deg: 0.0, tank_id: Some("bt_7")),
+        (pos_xz: (-48.0, 148.0), yaw_deg: 0.0, tank_id: Some("t34_76")),
         (pos_xz: (-24.0, 144.0), yaw_deg: 0.0, tank_id: Some("t34_85")),
         (pos_xz: (24.0, 144.0), yaw_deg: 0.0, tank_id: Some("m4a3e8")),
         (pos_xz: (48.0, 148.0), yaw_deg: 0.0, tank_id: Some("su_100")),

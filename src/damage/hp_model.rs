@@ -542,7 +542,7 @@ mod tests {
             let h = app.world().get::<TankHealth>(enemy).unwrap();
             let mods = app.world().get::<TankModules>(enemy).unwrap();
             let c = app.world().get::<TankCombat>(enemy).unwrap();
-            assert!((h.hp - (850.0 - 180.0)).abs() < 1e-2, "hp={}", h.hp);
+            assert!((h.hp - (spec.max_hp - 180.0)).abs() < 1e-2, "hp={}", h.hp);
             assert_eq!(mods.state(ModuleKind::Engine), ModuleState::Damaged);
             assert!(c.alive);
             assert!((c.speed_mult - 0.55).abs() < 1e-2);

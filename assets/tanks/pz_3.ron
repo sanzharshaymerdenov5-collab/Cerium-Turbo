@@ -7,7 +7,7 @@
     tank_class: Medium,
     xp_cost: 450,
     credit_cost: 1200,
-    prerequisite: Some("pz_1"),
+    prerequisite: Some("pz_2_c"),
     gun_short: "50мм KwK 39",
     max_hp: 620.0,
     mass_kg: 21500.0,

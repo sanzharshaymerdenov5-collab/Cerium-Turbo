@@ -694,19 +694,29 @@ impl<'a> TankBuildCtx<'a> {
                 }
             }
             HullShape::HeavyBox => {
-                let s = (self.hl / 3.15).clamp(0.65, 1.15);
-                let y_lo = dh * 0.580;
-                let y_hi = dh * 0.696;
-                let step_d = 0.12 * s;
-                let step_w = 0.32 * s;
-                if y >= y_hi {
-                    // Вертикальная верхняя лобовая плита мехвода.
-                    -self.hl + step_d + step_w + (y - y_hi) * 0.14
-                } else if y >= y_lo {
-                    // Пологий передний трансмиссионный уступ.
-                    -self.hl + step_d + ((y - y_lo) / (y_hi - y_lo).max(0.05)) * step_w
+                if self.p.hull_length >= 7.0 {
+                    // Наклонный лоб корпуса Tiger II (ВЛД + НЛД без вертикальной ступеньки).
+                    let y_mid = dh * 0.58;
+                    if y >= y_mid {
+                        -self.hl + (y - y_mid) * 0.90
+                    } else {
+                        -self.hl + (y_mid - y) * 0.65
+                    }
                 } else {
-                    -self.hl + step_d + (y_lo - y) * 0.72
+                    let s = (self.hl / 3.15).clamp(0.65, 1.15);
+                    let y_lo = dh * 0.580;
+                    let y_hi = dh * 0.696;
+                    let step_d = 0.12 * s;
+                    let step_w = 0.32 * s;
+                    if y >= y_hi {
+                        // Вертикальная верхняя лобовая плита мехвода.
+                        -self.hl + step_d + step_w + (y - y_hi) * 0.14
+                    } else if y >= y_lo {
+                        // Пологий передний трансмиссионный уступ.
+                        -self.hl + step_d + ((y - y_lo) / (y_hi - y_lo).max(0.05)) * step_w
+                    } else {
+                        -self.hl + step_d + (y_lo - y) * 0.72
+                    }
                 }
             }
         }
@@ -1580,7 +1590,7 @@ mod tests {
     #[test]
     fn all_fifteen_tanks_build_distinct_detailed_models_and_enemy_camo() {
         let tanks = available_tanks();
-        assert_eq!(tanks.len(), 15);
+        assert_eq!(tanks.len(), 18);
         let mut counts = Vec::new();
         for t in &tanks {
             let parts = build_tank_parts_for_team(&t.profile, Team::Player);

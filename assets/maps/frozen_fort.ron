@@ -49,7 +49,7 @@
     targets: [],
     ally_spawns: [
         (pos_xz: (-48.0, 118.0), yaw_deg: 0.0, tank_id: Some("ms_1")),
-        (pos_xz: (-24.0, 120.0), yaw_deg: 0.0, tank_id: Some("bt_7")),
+        (pos_xz: (-24.0, 120.0), yaw_deg: 0.0, tank_id: Some("kv_1")),
         (pos_xz: (24.0, 120.0), yaw_deg: 0.0, tank_id: Some("t34_85")),
         (pos_xz: (48.0, 118.0), yaw_deg: 0.0, tank_id: Some("is_3")),
     ],
@@ -57,7 +57,7 @@
         (pos_xz: (-48.0, -118.0), yaw_deg: 180.0, tank_id: Some("pz_3")),
         (pos_xz: (-24.0, -120.0), yaw_deg: 180.0, tank_id: Some("panther")),
         (pos_xz: (0.0, -114.0), yaw_deg: 180.0, tank_id: Some("su_100")),
-        (pos_xz: (24.0, -120.0), yaw_deg: 180.0, tank_id: Some("tiger_1")),
+        (pos_xz: (24.0, -120.0), yaw_deg: 180.0, tank_id: Some("tiger_2")),
         (pos_xz: (48.0, -118.0), yaw_deg: 180.0, tank_id: Some("m26_pershing")),
     ],
     waypoints: [

@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn all_fifteen_tanks_produce_valid_hull_and_turret_plates() {
         let tanks = available_tanks();
-        assert_eq!(tanks.len(), 15);
+        assert_eq!(tanks.len(), 18);
         for spec in &tanks {
             let hull = hull_plate_specs(spec);
             let turret = turret_plate_specs(spec);

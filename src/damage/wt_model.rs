@@ -811,28 +811,31 @@ mod tests {
             "враг должен остаться жив после нелетального попадания союзного ИИ"
         );
 
-        // Игрок бьёт в боеукладку -> XRayHitReport активен, DamageFeed заполнен, killer == Some(human).
+        // Игрок бьёт в боеукладку (2 попадания гарантируют переход Intact -> Damaged -> Destroyed)
+        // -> XRayHitReport активен, DamageFeed заполнен, killer == Some(human).
         let mut reader = app
             .world_mut()
             .resource::<Messages<TankDestroyedMessage>>()
             .get_cursor();
-        app.world_mut().write_message(ArmorImpactMessage {
-            plate_entity: enemy,
-            owner_tank: Some(enemy),
-            zone: Some(ArmorZone::HullSideLeft),
-            target_name: "Враг (борт)".into(),
-            shooter: Some(human),
-            shooter_team: Some(Team::Player),
-            hit_point: Vec3::new(-1.3, 0.68, -0.45),
-            hit_normal: Vec3::NEG_X,
-            ray_dir: Vec3::X,
-            dist_m: 100.0,
-            angle_deg: 0.0,
-            armor_thickness_mm: 45.0,
-            shell: spec.shell,
-            outcome: ImpactOutcome::Penetration { effective_mm: 45.0 },
-        });
-        app.update();
+        for _ in 0..2 {
+            app.world_mut().write_message(ArmorImpactMessage {
+                plate_entity: enemy,
+                owner_tank: Some(enemy),
+                zone: Some(ArmorZone::HullSideLeft),
+                target_name: "Враг (борт)".into(),
+                shooter: Some(human),
+                shooter_team: Some(Team::Player),
+                hit_point: Vec3::new(-1.3, 0.68, -0.45),
+                hit_normal: Vec3::NEG_X,
+                ray_dir: Vec3::X,
+                dist_m: 100.0,
+                angle_deg: 0.0,
+                armor_thickness_mm: 45.0,
+                shell: spec.shell,
+                outcome: ImpactOutcome::Penetration { effective_mm: 45.0 },
+            });
+            app.update();
+        }
 
         assert!(app.world().resource::<XRayHitReport>().active);
         assert!(!app.world().resource::<DamageFeed>().items.is_empty());

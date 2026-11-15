@@ -15,7 +15,7 @@ use crate::tank::{PlayerTank, TankCombat, TankSpec};
 pub const SAVE_STORAGE_KEY: &str = "cerium_turbo_save_v1";
 
 /// Стартовые резервные танки I уровня, доступные игроку с начала игры.
-pub const STARTER_TANKS: [&str; 3] = ["ms_1", "pz_1", "m2a4"];
+pub const STARTER_TANKS: [&str; 3] = ["ms_1", "pz_2_c", "m2a4"];
 
 fn default_credits() -> u64 {
     1500
@@ -61,8 +61,10 @@ impl Default for PlayerProgression {
 }
 
 impl PlayerProgression {
-    /// Гарантирует, что стартовые танки `"ms_1"`, `"pz_1"` и `"m2a4"` всегда исследованы и куплены.
+    /// Гарантирует, что стартовые танки `"ms_1"`, `"pz_2_c"` и `"m2a4"` всегда исследованы и куплены.
     pub fn ensure_starters(&mut self) {
+        self.researched.remove("pz_1");
+        self.owned.remove("pz_1");
         for id in STARTER_TANKS {
             if !self.researched.contains(id) {
                 self.researched.insert(id.to_string());
@@ -131,13 +133,21 @@ pub fn is_researched(prog: &PlayerProgression, id: &str) -> bool {
     prog.researched.contains(id)
 }
 
+/// Проверяет, исследован ли хотя бы один из пререквизитов танка (основной или альтернативный).
+pub fn has_prerequisite_researched(prog: &PlayerProgression, spec: &TankSpec) -> bool {
+    match (&spec.prerequisite, &spec.alt_prerequisite) {
+        (None, None) => true,
+        (Some(p), None) => is_researched(prog, p),
+        (None, Some(alt)) => is_researched(prog, alt),
+        (Some(p), Some(alt)) => is_researched(prog, p) || is_researched(prog, alt),
+    }
+}
+
 pub fn can_research(prog: &PlayerProgression, spec: &TankSpec) -> bool {
     if is_researched(prog, &spec.id) {
         return false;
     }
-    if let Some(ref prereq) = spec.prerequisite
-        && !is_researched(prog, prereq)
-    {
+    if !has_prerequisite_researched(prog, spec) {
         return false;
     }
     prog.xp >= spec.xp_cost as u64
@@ -153,9 +163,7 @@ pub fn research_tank(prog: &mut PlayerProgression, spec: &TankSpec) -> Result<()
     if is_researched(prog, &spec.id) {
         return Err("Танк уже исследован");
     }
-    if let Some(ref prereq) = spec.prerequisite
-        && !is_researched(prog, prereq)
-    {
+    if !has_prerequisite_researched(prog, spec) {
         return Err("Не исследован предыдущий танк");
     }
     let cost = spec.xp_cost as u64;
@@ -465,10 +473,10 @@ mod tests {
         }
 
         prog.researched.remove("ms_1");
-        prog.owned.remove("pz_1");
+        prog.owned.remove("pz_2_c");
         ensure_starters(&mut prog);
         assert!(is_researched(&prog, "ms_1"));
-        assert!(is_owned(&prog, "pz_1"));
+        assert!(is_owned(&prog, "pz_2_c"));
     }
 
     #[test]
@@ -509,6 +517,27 @@ mod tests {
         assert!(research_tank(&mut prog, &tier3).is_ok());
         assert!(!can_buy(&prog, &tier3));
         assert!(buy_tank(&mut prog, &tier3).is_err());
+
+        // Альтернативные ветки (alt_prerequisite): достаточно исследовать ОДИН из пререквизитов.
+        let mut alt_prog = PlayerProgression {
+            xp: 20_000,
+            credits: 50_000,
+            ..Default::default()
+        };
+        let bt7 = load_tank_spec("bt_7").unwrap();
+        let kv1 = load_tank_spec("kv_1").unwrap();
+        let t34_85 = load_tank_spec("t34_85").unwrap();
+        let su_100 = load_tank_spec("su_100").unwrap();
+        let is_3 = load_tank_spec("is_3").unwrap();
+        assert!(research_tank(&mut alt_prog, &bt7).is_ok());
+        assert!(research_tank(&mut alt_prog, &kv1).is_ok());
+        // Исследован только КВ-1 (без Т-34-76), но открыты обе ветки IV ранга: Т-34-85 и СУ-100.
+        assert!(can_research(&alt_prog, &t34_85));
+        assert!(can_research(&alt_prog, &su_100));
+        assert!(research_tank(&mut alt_prog, &su_100).is_ok());
+        // Исследована только СУ-100 (без Т-34-85), но ИС-3 на V ранге уже доступен к исследованию.
+        assert!(can_research(&alt_prog, &is_3));
+        assert!(research_tank(&mut alt_prog, &is_3).is_ok());
     }
 
     #[test]

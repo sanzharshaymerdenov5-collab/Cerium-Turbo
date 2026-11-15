@@ -231,6 +231,8 @@ pub struct TankSpec {
     #[serde(default)]
     pub prerequisite: Option<String>,
     #[serde(default)]
+    pub alt_prerequisite: Option<String>,
+    #[serde(default)]
     pub gun_short: String,
     #[serde(default = "default_max_hp")]
     pub max_hp: f32,
@@ -263,15 +265,18 @@ impl TankSpec {
 /// Встроенные в бинарник описания танков (wasm-совместимо, без async-загрузки).
 pub const MS_1_RON: &str = include_str!("../../assets/tanks/ms_1.ron");
 pub const BT_7_RON: &str = include_str!("../../assets/tanks/bt_7.ron");
+pub const T34_76_RON: &str = include_str!("../../assets/tanks/t34_76.ron");
+pub const KV_1_RON: &str = include_str!("../../assets/tanks/kv_1.ron");
 pub const T34_85_RON: &str = include_str!("../../assets/tanks/t34_85.ron");
 pub const SU_100_RON: &str = include_str!("../../assets/tanks/su_100.ron");
 pub const IS_3_RON: &str = include_str!("../../assets/tanks/is_3.ron");
 
-pub const PZ_1_RON: &str = include_str!("../../assets/tanks/pz_1.ron");
+pub const PZ_2_C_RON: &str = include_str!("../../assets/tanks/pz_2_c.ron");
 pub const PZ_3_RON: &str = include_str!("../../assets/tanks/pz_3.ron");
 pub const PZ_4_RON: &str = include_str!("../../assets/tanks/pz_4.ron");
 pub const PANTHER_RON: &str = include_str!("../../assets/tanks/panther.ron");
 pub const TIGER_1_RON: &str = include_str!("../../assets/tanks/tiger_1.ron");
+pub const TIGER_2_RON: &str = include_str!("../../assets/tanks/tiger_2.ron");
 
 pub const M2A4_RON: &str = include_str!("../../assets/tanks/m2a4.ron");
 pub const M3_STUART_RON: &str = include_str!("../../assets/tanks/m3_stuart.ron");
@@ -284,14 +289,17 @@ pub fn load_tank_spec(id: &str) -> Option<TankSpec> {
     match id {
         "ms_1" => TankSpec::from_ron(MS_1_RON).ok(),
         "bt_7" => TankSpec::from_ron(BT_7_RON).ok(),
+        "t34_76" => TankSpec::from_ron(T34_76_RON).ok(),
+        "kv_1" => TankSpec::from_ron(KV_1_RON).ok(),
         "t34_85" => TankSpec::from_ron(T34_85_RON).ok(),
         "su_100" => TankSpec::from_ron(SU_100_RON).ok(),
         "is_3" => TankSpec::from_ron(IS_3_RON).ok(),
-        "pz_1" => TankSpec::from_ron(PZ_1_RON).ok(),
+        "pz_2_c" | "pz_1" => TankSpec::from_ron(PZ_2_C_RON).ok(),
         "pz_3" => TankSpec::from_ron(PZ_3_RON).ok(),
         "pz_4" => TankSpec::from_ron(PZ_4_RON).ok(),
         "panther" => TankSpec::from_ron(PANTHER_RON).ok(),
         "tiger_1" => TankSpec::from_ron(TIGER_1_RON).ok(),
+        "tiger_2" => TankSpec::from_ron(TIGER_2_RON).ok(),
         "m2a4" => TankSpec::from_ron(M2A4_RON).ok(),
         "m3_stuart" => TankSpec::from_ron(M3_STUART_RON).ok(),
         "m24_chaffee" => TankSpec::from_ron(M24_CHAFFEE_RON).ok(),
@@ -306,14 +314,17 @@ pub fn available_tanks() -> Vec<TankSpec> {
     [
         "ms_1",
         "bt_7",
+        "t34_76",
+        "kv_1",
         "t34_85",
         "su_100",
         "is_3",
-        "pz_1",
+        "pz_2_c",
         "pz_3",
         "pz_4",
         "panther",
         "tiger_1",
+        "tiger_2",
         "m2a4",
         "m3_stuart",
         "m24_chaffee",
@@ -333,41 +344,63 @@ mod tests {
     #[test]
     fn all_fifteen_historical_tanks_parse_and_follow_ap_only() {
         let tanks = available_tanks();
-        assert_eq!(tanks.len(), 15);
+        assert_eq!(tanks.len(), 18);
         for t in &tanks {
             assert_eq!(t.shell.shell_type, ShellType::SolidAP, "{}", t.id);
             assert!(t.max_hp >= 350.0, "{}: hp={}", t.id, t.max_hp);
             assert!((t.profile.gun_voxel_size - 0.04).abs() < 1e-6, "{}", t.id);
             assert!((1..=5).contains(&t.tier), "{}: tier={}", t.id, t.tier);
             assert!(!t.gun_short.is_empty(), "{}", t.id);
-        }
-
-        // Проверяем порядок наций (USSR I-V, Germany I-V, USA I-V) и линейную цепочку пререквизитов.
-        for (n_idx, nation) in Nation::all().into_iter().enumerate() {
-            let branch = &tanks[n_idx * 5..(n_idx + 1) * 5];
-            for (idx, t) in branch.iter().enumerate() {
-                assert_eq!(t.nation_id, nation, "{}", t.id);
-                assert_eq!(t.tier as usize, idx + 1, "{}", t.id);
-                if idx == 0 {
-                    assert_eq!(t.xp_cost, 0);
-                    assert_eq!(t.credit_cost, 0);
-                    assert_eq!(t.prerequisite, None);
-                } else {
-                    assert_eq!(t.prerequisite.as_deref(), Some(branch[idx - 1].id.as_str()));
-                    assert!(t.xp_cost > 0 && t.credit_cost > 0);
-                }
+            if t.tier == 1 {
+                assert_eq!(t.xp_cost, 0, "{}", t.id);
+                assert_eq!(t.credit_cost, 0, "{}", t.id);
+                assert_eq!(t.prerequisite, None, "{}", t.id);
+            } else {
+                assert!(t.prerequisite.is_some(), "{}", t.id);
+                assert!(t.xp_cost > 0 && t.credit_cost > 0, "{}", t.id);
             }
         }
 
+        // Проверяем альтернативные ветки СССР (Tier III: Т-34-76 / КВ-1; Tier IV: Т-34-85 / СУ-100; Tier V: ИС-3)
+        // и Германии (Tier I: Pz. II Ausf. C; Tier IV: Panther / Tiger I; Tier V: Tiger II).
+        let pz2 = load_tank_spec("pz_2_c").unwrap();
+        assert_eq!(pz2.tier, 1);
+        assert_eq!(pz2.name, "Pz.Kpfw. II Ausf. C");
+
+        let t34_76 = load_tank_spec("t34_76").unwrap();
+        let kv1 = load_tank_spec("kv_1").unwrap();
+        assert_eq!(t34_76.tier, 3);
+        assert_eq!(kv1.tier, 3);
+        assert_eq!(t34_76.prerequisite.as_deref(), Some("bt_7"));
+        assert_eq!(kv1.prerequisite.as_deref(), Some("bt_7"));
+
+        let t34_85 = load_tank_spec("t34_85").unwrap();
         let su = load_tank_spec("su_100").unwrap();
+        assert_eq!(t34_85.tier, 4);
+        assert_eq!(su.tier, 4);
+        assert_eq!(t34_85.prerequisite.as_deref(), Some("t34_76"));
+        assert_eq!(t34_85.alt_prerequisite.as_deref(), Some("kv_1"));
+        assert_eq!(su.prerequisite.as_deref(), Some("kv_1"));
+        assert_eq!(su.alt_prerequisite.as_deref(), Some("t34_76"));
         assert_eq!(su.yaw_limits_deg, Some((-12.0, 12.0)));
         assert_eq!(su.profile.hull_shape, HullShape::Casemate);
         assert_eq!(su.tank_class, TankClass::TankDestroyer);
 
         let is3 = load_tank_spec("is_3").unwrap();
+        assert_eq!(is3.tier, 5);
+        assert_eq!(is3.prerequisite.as_deref(), Some("t34_85"));
+        assert_eq!(is3.alt_prerequisite.as_deref(), Some("su_100"));
         assert_eq!(is3.profile.hull_shape, HullShape::PikeNose);
         assert!(is3.armor.turret_front_mm >= 220.0);
         assert_eq!(is3.tank_class, TankClass::Heavy);
+
+        let tiger1 = load_tank_spec("tiger_1").unwrap();
+        let tiger2 = load_tank_spec("tiger_2").unwrap();
+        assert_eq!(tiger1.tier, 4);
+        assert_eq!(tiger1.prerequisite.as_deref(), Some("pz_4"));
+        assert_eq!(tiger2.tier, 5);
+        assert_eq!(tiger2.prerequisite.as_deref(), Some("tiger_1"));
+        assert_eq!(tiger2.alt_prerequisite.as_deref(), Some("panther"));
 
         let bt7 = load_tank_spec("bt_7").unwrap();
         assert!(bt7.max_speed_kmh >= 52.0);
