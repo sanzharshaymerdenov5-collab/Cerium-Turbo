@@ -153,6 +153,134 @@ pub fn mesh_grid(grid: &VoxelGrid) -> MeshData {
     mesh_region(grid, IVec3::ZERO, grid.dims)
 }
 
+/// Множитель яркости вершины по числу открытых соседей угла (0 = глубокий угол, 3 = открыто).
+const AO_CURVE: [f32; 4] = [0.32, 0.54, 0.77, 1.0];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct AoFaceKey {
+    raw: u8,
+    ao: [u8; 4],
+}
+
+/// AO для 4 углов грани: `q` — воксель перед гранью (со стороны нормали),
+/// `du`/`dv` — оси грани. Порядок углов: (-,-), (+,-), (+,+), (-,+).
+fn face_corner_ao(grid: &VoxelGrid, q: IVec3, du: IVec3, dv: IVec3) -> [u8; 4] {
+    let solid = |p: IVec3| grid.is_solid(p) as u8;
+    let mut out = [3u8; 4];
+    for (k, (a, b)) in [(-1, -1), (1, -1), (1, 1), (-1, 1)].into_iter().enumerate() {
+        let s1 = solid(q + du * a);
+        let s2 = solid(q + dv * b);
+        let c = solid(q + du * a + dv * b);
+        out[k] = if s1 == 1 && s2 == 1 { 0 } else { 3 - s1 - s2 - c };
+    }
+    out
+}
+
+/// Greedy-мешинг с вершинным Ambient Occlusion для небольших моделей (танки, мишени, реквизит).
+///
+/// Соседние грани сливаются только при совпадении материала и AO-узора,
+/// поэтому плоские участки остаются крупными квадами, а стыки, ниши и углы
+/// получают мягкое затенение. Диагональ квада выбирается по AO (без «анизотропных» артефактов).
+/// Вершины — относительно `grid.origin`, как и в [`mesh_region`].
+pub fn mesh_grid_ao(grid: &VoxelGrid) -> MeshData {
+    let dims = grid.dims.as_ivec3();
+    let s = grid.voxel_size;
+    let mut data = MeshData::default();
+
+    for d in 0..3usize {
+        let u = (d + 1) % 3;
+        let v = (d + 2) % 3;
+        let mut n = IVec3::ZERO;
+        n[d] = 1;
+        let mut du = IVec3::ZERO;
+        du[u] = 1;
+        let mut dv = IVec3::ZERO;
+        dv[v] = 1;
+        let nu = dims[u].max(0) as usize;
+        let nv = dims[v].max(0) as usize;
+        let mut mask: Vec<Option<AoFaceKey>> = vec![None; nu * nv];
+
+        for positive in [true, false] {
+            let normal = if positive { n } else { -n };
+            let normal_f = normal.as_vec3().to_array();
+            for slice in 0..dims[d] {
+                for j in 0..nv {
+                    for i in 0..nu {
+                        let mut p = IVec3::ZERO;
+                        p[d] = slice;
+                        p[u] = i as i32;
+                        p[v] = j as i32;
+                        let raw = grid.get_raw(p);
+                        mask[j * nu + i] = if raw != 0 && !grid.is_solid(p + normal) {
+                            Some(AoFaceKey {
+                                raw,
+                                ao: face_corner_ao(grid, p + normal, du, dv),
+                            })
+                        } else {
+                            None
+                        };
+                    }
+                }
+
+                for j in 0..nv {
+                    let mut i = 0;
+                    while i < nu {
+                        let Some(key) = mask[j * nu + i] else {
+                            i += 1;
+                            continue;
+                        };
+                        let mut w = 1;
+                        while i + w < nu && mask[j * nu + i + w] == Some(key) {
+                            w += 1;
+                        }
+                        let mut h = 1;
+                        'grow: while j + h < nv {
+                            for k in 0..w {
+                                if mask[(j + h) * nu + i + k] != Some(key) {
+                                    break 'grow;
+                                }
+                            }
+                            h += 1;
+                        }
+                        for jj in 0..h {
+                            for k in 0..w {
+                                mask[(j + jj) * nu + i + k] = None;
+                            }
+                        }
+
+                        let mut base = IVec3::ZERO;
+                        base[d] = slice + positive as i32;
+                        base[u] = i as i32;
+                        base[v] = j as i32;
+                        let wu = du * w as i32;
+                        let hv = dv * h as i32;
+                        let corners = [base, base + wu, base + wu + hv, base + hv];
+                        let color = color_of(grid, key.raw);
+                        let start = data.positions.len() as u32;
+                        for (c, ao) in corners.iter().zip(key.ao) {
+                            data.positions.push((c.as_vec3() * s).to_array());
+                            data.normals.push(normal_f);
+                            let f = AO_CURVE[ao as usize];
+                            data.colors.push([color[0] * f, color[1] * f, color[2] * f, color[3]]);
+                        }
+                        let a = key.ao;
+                        let flip = (a[0] as u16 + a[2] as u16) < (a[1] as u16 + a[3] as u16);
+                        let tri: [u32; 6] = match (positive, flip) {
+                            (true, false) => [0, 1, 2, 0, 2, 3],
+                            (true, true) => [1, 2, 3, 1, 3, 0],
+                            (false, false) => [0, 2, 1, 0, 3, 2],
+                            (false, true) => [1, 3, 2, 1, 0, 3],
+                        };
+                        data.indices.extend(tri.iter().map(|t| start + t));
+                        i += w;
+                    }
+                }
+            }
+        }
+    }
+    data
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +345,48 @@ mod tests {
         g.set_raw(IVec3::new(0, 0, 0), 1);
         let m = mesh_grid(&g);
         assert!(m.colors.iter().all(|c| *c == [0.1, 0.2, 0.3, 1.0]));
+    }
+
+    /// Каждый треугольник AO-меша обходится против часовой стрелки относительно своей нормали.
+    fn assert_ccw_winding(m: &MeshData) {
+        for tri in m.indices.chunks(3) {
+            let a = Vec3::from(m.positions[tri[0] as usize]);
+            let b = Vec3::from(m.positions[tri[1] as usize]);
+            let c = Vec3::from(m.positions[tri[2] as usize]);
+            let n = Vec3::from(m.normals[tri[0] as usize]);
+            assert!((b - a).cross(c - a).dot(n) > 0.0, "неверный обход треугольника");
+        }
+    }
+
+    #[test]
+    fn ao_mesher_single_voxel_has_six_lit_ccw_quads() {
+        let mut g = VoxelGrid::new(UVec3::new(3, 3, 3), 0.5, Vec3::ZERO);
+        g.set(IVec3::new(1, 1, 1), Material::TankOlive);
+        let m = mesh_grid_ao(&g);
+        assert_eq!(m.quad_count(), 6);
+        assert_ccw_winding(&m);
+        let base = Material::TankOlive.linear_rgba();
+        assert!(m.colors.iter().all(|c| *c == base), "одиночный воксель не затеняется");
+    }
+
+    #[test]
+    fn ao_mesher_merges_flat_slab_and_darkens_inner_corner() {
+        let mut g = VoxelGrid::new(UVec3::new(16, 4, 16), 0.1, Vec3::ZERO);
+        g.fill_box(IVec3::ZERO, IVec3::new(15, 0, 15), Material::TankOlive);
+        let flat = mesh_grid_ao(&g);
+        assert_eq!(flat.quad_count(), 6, "ровная плита должна слиться в 6 квадов");
+        assert_ccw_winding(&flat);
+
+        // Ставим на плиту блок: в углу примыкания на плите появляется затенение.
+        g.fill_box(IVec3::new(6, 1, 6), IVec3::new(9, 2, 9), Material::TankDark);
+        let m = mesh_grid_ao(&g);
+        assert_ccw_winding(&m);
+        let base = Material::TankOlive.linear_rgba();
+        let darkened = m
+            .colors
+            .iter()
+            .any(|c| c[0] < base[0] * 0.9 && c[0] > 0.0 && c[1] < base[1] * 0.9);
+        assert!(darkened, "у основания блока должен быть AO");
+        assert!(m.quad_count() < naive_face_count(&g, IVec3::ZERO, g.dims));
     }
 }

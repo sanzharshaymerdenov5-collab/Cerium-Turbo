@@ -293,7 +293,7 @@ pub fn voxel_model_bundle(
     meshes: &mut Assets<Mesh>,
     assets: &VoxelAssets,
 ) -> impl Bundle {
-    let data = mesher::mesh_grid(grid);
+    let data = mesher::mesh_grid_ao(grid);
     (
         Mesh3d(meshes.add(data.into_mesh())),
         MeshMaterial3d(assets.material.clone()),

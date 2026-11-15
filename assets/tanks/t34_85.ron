@@ -39,8 +39,8 @@
     ),
     visual: Procedural,
     profile: (
-        voxel_size: 0.15,
-        gun_voxel_size: 0.1,
+        voxel_size: 0.08,
+        gun_voxel_size: 0.04,
         hull_length: 6.0,
         hull_width: 3.0,
         track_width: 0.5,

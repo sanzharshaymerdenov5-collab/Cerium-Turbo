@@ -46,10 +46,19 @@ pub enum Material {
     EnemyArmor = 26,
     EnemyDark = 27,
     EnemyMark = 28,
+    // --- Детализация моделей танков ---
+    TankOliveLight = 29,
+    TankRubber = 30,
+    TankLens = 31,
+    TankWood = 32,
+    TankTrackLight = 33,
+    TankExhaust = 34,
+    EnemyArmorLight = 35,
+    EnemyCamo = 36,
 }
 
 /// Список всех непустых материалов (для создания ассетов и тестов).
-pub const ALL_MATERIALS: [Material; 21] = [
+pub const ALL_MATERIALS: [Material; 29] = [
     Material::Soil,
     Material::Grass,
     Material::Rock,
@@ -71,6 +80,14 @@ pub const ALL_MATERIALS: [Material; 21] = [
     Material::EnemyArmor,
     Material::EnemyDark,
     Material::EnemyMark,
+    Material::TankOliveLight,
+    Material::TankRubber,
+    Material::TankLens,
+    Material::TankWood,
+    Material::TankTrackLight,
+    Material::TankExhaust,
+    Material::EnemyArmorLight,
+    Material::EnemyCamo,
 ];
 
 impl Material {
@@ -130,6 +147,14 @@ impl Material {
             Material::EnemyArmor => [0.44, 0.39, 0.31],
             Material::EnemyDark => [0.26, 0.23, 0.20],
             Material::EnemyMark => [0.90, 0.42, 0.12],
+            Material::TankOliveLight => [0.40, 0.47, 0.27],
+            Material::TankRubber => [0.07, 0.07, 0.07],
+            Material::TankLens => [0.16, 0.26, 0.33],
+            Material::TankWood => [0.50, 0.36, 0.21],
+            Material::TankTrackLight => [0.27, 0.26, 0.24],
+            Material::TankExhaust => [0.38, 0.23, 0.14],
+            Material::EnemyArmorLight => [0.55, 0.50, 0.39],
+            Material::EnemyCamo => [0.30, 0.34, 0.22],
         }
     }
 
