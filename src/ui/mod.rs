@@ -19,6 +19,7 @@ impl Plugin for UiPlugin {
         }
 
         app.init_resource::<hangar::HangarViewState>()
+            .init_resource::<hud::HudHitMarker>()
             .add_systems(OnEnter(GameState::Hangar), hangar::setup_hangar)
             .add_systems(Update, hangar::update_hangar.run_if(in_state(GameState::Hangar)))
             .add_systems(

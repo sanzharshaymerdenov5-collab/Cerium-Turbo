@@ -7,6 +7,7 @@ use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::math::{IVec3, UVec3};
 use bevy::prelude::*;
 
+use crate::audio::{AudioSettings, SoundPreset, UiSoundMessage};
 use crate::ballistics::penetration::penetration_at;
 use crate::core::{DamageRulesMode, GameState, SelectedMap, SelectedTank, TankId};
 use crate::damage::{ModuleKind, TankCrew, TankModules};
@@ -27,6 +28,7 @@ pub struct HangarViewState {
     pub xray_armor: bool,
     pub prev_xray_btn: bool,
     pub prev_mode_btn: bool,
+    pub prev_audio_btn: bool,
 }
 
 impl Default for HangarViewState {
@@ -39,6 +41,7 @@ impl Default for HangarViewState {
             xray_armor: false,
             prev_xray_btn: false,
             prev_mode_btn: false,
+            prev_audio_btn: false,
         }
     }
 }
@@ -58,6 +61,7 @@ pub enum HangarButton {
     SelectMap(usize),
     ToggleMode,
     ToggleXray,
+    ToggleAudio,
     StartBattle,
 }
 
@@ -66,6 +70,7 @@ pub enum HangarLabel {
     Info,
     ToggleXray,
     ToggleMode,
+    ToggleAudio,
 }
 
 fn format_hangar_info(
@@ -310,6 +315,7 @@ pub fn setup_hangar(
     selected_map: Res<SelectedMap>,
     mode: Res<DamageRulesMode>,
     view: Res<HangarViewState>,
+    audio: Option<Res<AudioSettings>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     assets: Res<VoxelAssets>,
@@ -375,6 +381,7 @@ pub fn setup_hangar(
         .or_else(|| maps.first().cloned())
         .expect("default map");
     let info = format_hangar_info(&spec, &map_spec, *mode, view.xray_armor);
+    let muted = audio.as_ref().is_some_and(|a| a.muted);
 
     commands
         .spawn((
@@ -462,6 +469,39 @@ pub fn setup_hangar(
                                     Text::new("Броня/экипаж [V]"),
                                     TextFont::from_font_size(13.5),
                                     TextColor(Color::srgb(0.86, 0.94, 1.0)),
+                                ));
+                            });
+
+                        btns_r
+                            .spawn((
+                                Interaction::default(),
+                                HangarButton::ToggleAudio,
+                                Node {
+                                    padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                                    border: UiRect::all(Val::Px(1.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(if muted {
+                                    Color::srgb(0.28, 0.14, 0.14)
+                                } else {
+                                    Color::srgb(0.14, 0.24, 0.20)
+                                }),
+                                BorderColor::all(if muted {
+                                    Color::srgb(0.82, 0.38, 0.36)
+                                } else {
+                                    Color::srgb(0.42, 0.78, 0.62)
+                                }),
+                            ))
+                            .with_children(|btn| {
+                                btn.spawn((
+                                    HangarLabel::ToggleAudio,
+                                    Text::new(if muted {
+                                        "Звук [N]: ВЫКЛ"
+                                    } else {
+                                        "Звук [N]: ВКЛ"
+                                    }),
+                                    TextFont::from_font_size(13.5),
+                                    TextColor(Color::srgb(0.88, 0.96, 0.92)),
                                 ));
                             });
                     });
@@ -592,7 +632,7 @@ pub fn setup_hangar(
                 .with_children(|h| {
                     h.spawn((
                         Text::new(
-                            "ПКМ/ЛКМ: камера  |  Колёсико: зум  |  1-5 / ←→: танк  |  Q / E: карта  |  M: режим (WoT/WT)  |  V: рентген",
+                            "ПКМ/ЛКМ: камера  |  Колёсико: зум  |  1-5 / ←→: танк  |  Q / E: карта  |  M: режим  |  V: рентген  |  N: звук",
                         ),
                         TextFont::from_font_size(12.5),
                         TextColor(Color::srgb(0.75, 0.80, 0.86)),
@@ -637,15 +677,21 @@ fn hangar_camera_pos(view: &HangarViewState) -> Vec3 {
 pub fn update_hangar(
     mut commands: Commands,
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mouse_btn: Res<ButtonInput<MouseButton>>,
-    motion: Res<AccumulatedMouseMotion>,
-    scroll: Res<AccumulatedMouseScroll>,
+    input: (
+        Res<ButtonInput<KeyCode>>,
+        Res<ButtonInput<MouseButton>>,
+        Res<AccumulatedMouseMotion>,
+        Res<AccumulatedMouseScroll>,
+    ),
     mut next_state: ResMut<NextState<GameState>>,
     mut selected_tank: ResMut<SelectedTank>,
     mut selected_map: ResMut<SelectedMap>,
     mut mode: ResMut<DamageRulesMode>,
     mut view: ResMut<HangarViewState>,
+    mut audio_pair: (
+        Option<ResMut<AudioSettings>>,
+        Option<ResMut<Messages<UiSoundMessage>>>,
+    ),
     mut assets_pair: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>, Res<VoxelAssets>),
     mut scene_q: ParamSet<(
         Query<(Entity, &mut Transform), With<HangarTurntable>>,
@@ -656,6 +702,7 @@ pub fn update_hangar(
     mut labels: Query<(&HangarLabel, &mut Text)>,
     mut btns: Query<(&HangarButton, &Interaction, &mut BackgroundColor, &mut BorderColor)>,
 ) {
+    let (keys, mouse_btn, motion, scroll) = input;
     let tanks = available_tanks();
     let cur_idx = tanks
         .iter()
@@ -698,8 +745,10 @@ pub fn update_hangar(
     let mut ui_hovered = false;
     let mut toggle_xray = keys.just_pressed(KeyCode::KeyV);
     let mut toggle_mode = keys.just_pressed(KeyCode::KeyM);
+    let mut toggle_audio = false;
     let mut xray_pressed_now = false;
     let mut mode_pressed_now = false;
+    let mut audio_pressed_now = false;
     let mut start = keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space);
 
     for (btn, interaction, _, _) in &btns {
@@ -712,6 +761,7 @@ pub fn update_hangar(
                 HangarButton::SelectMap(i) if i < maps.len() => new_map_idx = Some(i),
                 HangarButton::ToggleMode => mode_pressed_now = true,
                 HangarButton::ToggleXray => xray_pressed_now = true,
+                HangarButton::ToggleAudio => audio_pressed_now = true,
                 HangarButton::StartBattle => start = true,
                 _ => {}
             }
@@ -723,18 +773,25 @@ pub fn update_hangar(
     if mode_pressed_now && !view.prev_mode_btn {
         toggle_mode = true;
     }
+    if audio_pressed_now && !view.prev_audio_btn {
+        toggle_audio = true;
+    }
     view.prev_xray_btn = xray_pressed_now;
     view.prev_mode_btn = mode_pressed_now;
+    view.prev_audio_btn = audio_pressed_now;
 
+    let mut clicked = false;
     if let Some(i) = new_idx
         && tanks[i].id != selected_tank.0.0
     {
         selected_tank.0 = TankId(tanks[i].id.clone());
+        clicked = true;
     }
     if let Some(i) = new_map_idx
         && maps[i].id != selected_map.0
     {
         selected_map.0 = maps[i].id.clone();
+        clicked = true;
     }
     if toggle_mode {
         *mode = match *mode {
@@ -743,13 +800,27 @@ pub fn update_hangar(
                 DamageRulesMode::ArcadeHpAndModules
             }
         };
+        clicked = true;
     }
     if toggle_xray {
         view.xray_armor = !view.xray_armor;
+        clicked = true;
+    }
+    if toggle_audio && let Some(ref mut a) = audio_pair.0 {
+        a.muted = !a.muted;
+        if !a.muted {
+            clicked = true;
+        }
     }
     if start {
+        if let Some(ref mut msgs) = audio_pair.1 {
+            msgs.write(UiSoundMessage(SoundPreset::BattleStart));
+        }
         next_state.set(GameState::InBattle);
         return;
+    }
+    if clicked && let Some(ref mut msgs) = audio_pair.1 {
+        msgs.write(UiSoundMessage(SoundPreset::UiClick));
     }
 
     // Орбита камеры мышью.
@@ -785,6 +856,8 @@ pub fn update_hangar(
         .cloned()
         .or_else(|| load_map_spec("proving_grounds"))
         .expect("default map");
+
+    let muted = audio_pair.0.as_ref().is_some_and(|a| a.muted);
 
     // Подсветка кнопок.
     let wt_mode = *mode == DamageRulesMode::ModulesOnlyWt;
@@ -847,6 +920,24 @@ pub fn update_hangar(
                     BackgroundColor(Color::srgb(0.14, 0.20, 0.28))
                 };
             }
+            HangarButton::ToggleAudio => {
+                *bg = if *interaction == Interaction::Hovered {
+                    if muted {
+                        BackgroundColor(Color::srgb(0.38, 0.18, 0.18))
+                    } else {
+                        BackgroundColor(Color::srgb(0.18, 0.32, 0.26))
+                    }
+                } else if muted {
+                    BackgroundColor(Color::srgb(0.28, 0.14, 0.14))
+                } else {
+                    BackgroundColor(Color::srgb(0.14, 0.24, 0.20))
+                };
+                *border = BorderColor::all(if muted {
+                    Color::srgb(0.82, 0.38, 0.36)
+                } else {
+                    Color::srgb(0.42, 0.78, 0.62)
+                });
+            }
             HangarButton::StartBattle => {
                 *bg = if *interaction == Interaction::Hovered {
                     BackgroundColor(Color::srgb(0.32, 0.58, 0.28))
@@ -870,6 +961,13 @@ pub fn update_hangar(
                     "Броня/экипаж [V]: ВКЛ".to_string()
                 } else {
                     "Броня/экипаж [V]".to_string()
+                };
+            }
+            HangarLabel::ToggleAudio => {
+                txt.0 = if muted {
+                    "Звук [N]: ВЫКЛ".to_string()
+                } else {
+                    "Звук [N]: ВКЛ".to_string()
                 };
             }
         }

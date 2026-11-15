@@ -6,12 +6,14 @@
 //! только после завершения Этапа 6.
 
 pub mod ai;
+pub mod audio;
 pub mod ballistics;
 pub mod core;
 pub mod damage;
 pub mod maps;
 pub mod tank;
 pub mod ui;
+pub mod vfx;
 pub mod voxel;
 
 use avian3d::prelude::*;
@@ -27,6 +29,8 @@ pub fn configure_game_plugins(app: &mut App) {
         ballistics::BallisticsPlugin,
         damage::DamagePlugin,
         ai::AiPlugin,
+        vfx::VfxPlugin,
+        audio::GameAudioPlugin,
         ui::UiPlugin,
     ));
 }

@@ -12,10 +12,11 @@ use bevy::prelude::*;
 
 use crate::core::GameState;
 pub use armor::{ArmorOwner, TankCombat};
-pub use camera::{AimPlateInfo, AimTarget, TankCamera, spawn_battle_camera};
+pub use camera::{AimPlateInfo, AimTarget, CameraShake, TankCamera, spawn_battle_camera};
+pub use controller::TankFiredMessage;
 pub use spawn::{
-    AimCommand, GunPivot, HangarPreviewTank, MuzzlePoint, PlayerTank, Suspension, TankRoot,
-    TankState, TurretPivot, spawn_preview_tank, spawn_tank,
+    AimCommand, BarrelMesh, GunPivot, HangarPreviewTank, MuzzlePoint, PlayerTank, Suspension,
+    TankRoot, TankState, TurretPivot, spawn_preview_tank, spawn_tank,
 };
 pub use spec::{
     ArmorScheme, ArmorZone, HullShape, IS_3_RON, M24_CHAFFEE_RON, ProceduralTankProfile,
@@ -28,6 +29,8 @@ pub struct TankPlugin;
 impl Plugin for TankPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AimTarget>()
+            .init_resource::<CameraShake>()
+            .add_message::<TankFiredMessage>()
             .add_systems(
                 Update,
                 (

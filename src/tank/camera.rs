@@ -65,6 +65,24 @@ impl Default for AimTarget {
     }
 }
 
+/// Импульсная тряска камеры при выстреле, попадании по танку или близком подрыве БК.
+#[derive(Resource, Debug, Default)]
+pub struct CameraShake {
+    /// Амплитуда тряски (`0..1.5`).
+    pub trauma: f32,
+    pub kick_dir: Vec3,
+    pub elapsed: f32,
+}
+
+impl CameraShake {
+    pub fn add_trauma(&mut self, amount: f32, dir: Vec3) {
+        self.trauma = (self.trauma + amount.max(0.0)).min(1.4);
+        if dir.length_squared() > 1e-4 {
+            self.kick_dir = (self.kick_dir * 0.4 + dir.normalize() * amount).normalize_or_zero();
+        }
+    }
+}
+
 pub fn spawn_battle_camera(commands: &mut Commands) {
     commands.spawn((
         Name::new("BattleCamera"),
@@ -90,6 +108,7 @@ pub fn release_cursor_on_exit(mut cursors: Query<&mut CursorOptions, With<Primar
 
 #[allow(clippy::too_many_arguments)]
 pub fn update_tank_camera(
+    time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse_btn: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
@@ -101,6 +120,7 @@ pub fn update_tank_camera(
     world: Option<Res<VoxelWorld>>,
     plates: Query<(&GlobalTransform, &ArmorPlate, &TargetInfo, Option<&ArmorOwner>)>,
     mut aim: ResMut<AimTarget>,
+    mut shake: Option<ResMut<CameraShake>>,
     mut cam_q: Query<(&mut Transform, &mut Projection, &mut TankCamera), With<Camera3d>>,
 ) {
     let Ok((mut cam_tf, mut proj, mut cam)) = cam_q.single_mut() else {
@@ -197,6 +217,35 @@ pub fn update_tank_camera(
         aim.gun_point = gpt;
     } else {
         aim.gun_point = aim.point;
+    }
+
+    // Применяем визуальную тряску камеры ПОСЛЕ вычисления линии прицеливания, чтобы не сбивать наводку.
+    if let Some(ref mut s) = shake {
+        let dt = time.delta_secs();
+        s.elapsed += dt;
+        if s.trauma > 1e-4 {
+            let amp = (s.trauma * s.trauma).min(1.0);
+            let t = s.elapsed;
+            let scope_scale = if cam.sniper { 0.25 } else { 1.0 };
+            let jitter_pos = Vec3::new(
+                (t * 53.0).sin() * 0.24,
+                (t * 67.0).cos() * 0.20,
+                (t * 41.0).sin() * 0.16,
+            ) * amp
+                * scope_scale
+                + s.kick_dir * (amp * 0.28 * scope_scale);
+            let jitter_rot = Quat::from_euler(
+                EulerRot::YXZ,
+                (t * 47.0).cos() * 0.012 * amp * scope_scale,
+                (t * 61.0).sin() * 0.018 * amp * scope_scale,
+                (t * 59.0).cos() * 0.014 * amp * scope_scale,
+            );
+            cam_tf.translation += jitter_pos;
+            cam_tf.rotation *= jitter_rot;
+            s.trauma = (s.trauma - dt * 2.25).max(0.0);
+        } else {
+            s.kick_dir = Vec3::ZERO;
+        }
     }
 }
 

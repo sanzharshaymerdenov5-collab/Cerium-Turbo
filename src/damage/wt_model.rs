@@ -9,6 +9,7 @@ use super::crew::{CrewRole, CrewState, TankCrew};
 use super::hp_model::{DamageFeed, destroy_tank};
 use super::modules::{ModuleKind, ModuleState, TankModules};
 use super::spall::{compute_residual_penetration, generate_spall_rays, spall_cone_params};
+use super::{TankActionKind, TankActionMessage, TankDestroyedMessage};
 use crate::ballistics::{ArmorImpactMessage, HitKind, HitLog, penetration::ImpactOutcome};
 use crate::core::{DamageRulesMode, Team};
 use crate::tank::{PlayerTank, TankCombat, TankRoot, TurretPivot};
@@ -74,12 +75,15 @@ pub fn handle_wt_modules_impacts(
         &mut TankModules,
         &mut TankCrew,
         &mut TankCombat,
+        Option<&PlayerTank>,
     )>,
-    mut turrets: Query<(&GlobalTransform, &mut Transform, &TurretPivot)>,
+    turrets: Query<(&GlobalTransform, &TurretPivot)>,
     mut log: ResMut<HitLog>,
     mut feed: ResMut<DamageFeed>,
     mut report: ResMut<XRayHitReport>,
     assets: Option<Res<VoxelAssets>>,
+    mut destroyed_w: MessageWriter<TankDestroyedMessage>,
+    mut action_w: MessageWriter<TankActionMessage>,
     mut seed: Local<u64>,
 ) {
     if *mode != DamageRulesMode::ModulesOnlyWt {
@@ -90,13 +94,15 @@ pub fn handle_wt_modules_impacts(
         let Some(tank_ent) = msg.owner_tank else {
             continue;
         };
-        let Ok((hull_gt, root_opt, mut modules, mut crew, mut combat)) = tanks.get_mut(tank_ent)
+        let Ok((hull_gt, root_opt, mut modules, mut crew, mut combat, player_opt)) =
+            tanks.get_mut(tank_ent)
         else {
             continue;
         };
         if !combat.alive || msg.shooter_team == Some(combat.team) {
             continue;
         }
+        let was_burning = modules.fire_timer > 0.0;
 
         let record_xray = msg.shooter_team == Some(Team::Player) || msg.shooter.is_none();
         let zone_ru = msg.zone.map_or("Броня", |z| z.ru_name()).to_string();
@@ -190,8 +196,8 @@ pub fn handle_wt_modules_impacts(
 
                 let turret_gt = turrets
                     .iter()
-                    .find(|(_, _, tp)| tp.tank == tank_ent)
-                    .map(|(gt, _, _)| *gt);
+                    .find(|(_, tp)| tp.tank == tank_ent)
+                    .map(|(gt, _)| *gt);
                 let local_hit_y = msg.hit_point.y - hull_gt.translation().y;
 
                 let mut hit_modules: Vec<(ModuleKind, ModuleState)> = Vec::new();
@@ -339,16 +345,6 @@ pub fn handle_wt_modules_impacts(
                     }
                 }
 
-                if ammo_detonated {
-                    for (_, mut t_tf, tp) in &mut turrets {
-                        if tp.tank == tank_ent {
-                            t_tf.translation.y += 1.4;
-                            t_tf.rotate_z(0.28);
-                            t_tf.rotate_x(-0.18);
-                        }
-                    }
-                }
-
                 let alive_crew = crew.alive_count();
                 let kill_reason = if ammo_detonated {
                     Some("ДЕТОНАЦИЯ БОЕУКЛАДКИ".to_string())
@@ -357,6 +353,15 @@ pub fn handle_wt_modules_impacts(
                 } else {
                     None
                 };
+
+                if !was_burning && modules.fire_timer > 0.0 && kill_reason.is_none() {
+                    action_w.write(TankActionMessage {
+                        tank: tank_ent,
+                        pos: hull_gt.translation(),
+                        is_player: player_opt.is_some(),
+                        kind: TankActionKind::FireStarted,
+                    });
+                }
 
                 if let Some(ref reason) = kill_reason {
                     destroy_tank(
@@ -367,6 +372,12 @@ pub fn handle_wt_modules_impacts(
                         assets.as_deref(),
                         &mut rng,
                     );
+                    destroyed_w.write(TankDestroyedMessage {
+                        tank: tank_ent,
+                        pos: hull_gt.translation(),
+                        team: combat.team,
+                        ammo_detonated,
+                    });
                     log.push(
                         HitKind::Penetration,
                         format!("{reason}: {} (WT, {})", combat.tank_name, zone_ru),
@@ -436,6 +447,7 @@ pub fn tick_wt_crew_and_fire(
     mode: Res<DamageRulesMode>,
     mut report: ResMut<XRayHitReport>,
     mut tanks: Query<(
+        Entity,
         &GlobalTransform,
         &TankModules,
         &mut TankCrew,
@@ -445,6 +457,7 @@ pub fn tick_wt_crew_and_fire(
     mut log: ResMut<HitLog>,
     mut feed: ResMut<DamageFeed>,
     assets: Option<Res<VoxelAssets>>,
+    mut destroyed_w: MessageWriter<TankDestroyedMessage>,
     mut seed: Local<u64>,
 ) {
     let dt = time.delta_secs();
@@ -463,7 +476,7 @@ pub fn tick_wt_crew_and_fire(
         return;
     }
 
-    for (gt, modules, mut crew, mut combat, is_player) in &mut tanks {
+    for (tank_ent, gt, modules, mut crew, mut combat, is_player) in &mut tanks {
         if !combat.alive {
             continue;
         }
@@ -522,6 +535,12 @@ pub fn tick_wt_crew_and_fire(
                 assets.as_deref(),
                 &mut rng,
             );
+            destroyed_w.write(TankDestroyedMessage {
+                tank: tank_ent,
+                pos: gt.translation(),
+                team: combat.team,
+                ammo_detonated: false,
+            });
             let msg = if burned_out || modules.fire_timer > 0.0 {
                 format!("{} сгорел от пожара (WT)!", combat.tank_name)
             } else {
@@ -561,6 +580,8 @@ mod tests {
                 0.5,
             )))
             .add_message::<ArmorImpactMessage>()
+            .add_message::<TankDestroyedMessage>()
+            .add_message::<TankActionMessage>()
             .add_systems(
                 Update,
                 (

@@ -63,6 +63,18 @@ pub struct ArmorImpactMessage {
     pub outcome: ImpactOutcome,
 }
 
+/// Событие попадания снаряда в воксели карты (постройка или рельеф).
+#[derive(Message, Debug, Clone)]
+pub struct TerrainImpactMessage {
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub material: Material,
+    pub destructible: bool,
+    pub removed_count: usize,
+    pub caliber_mm: f32,
+    pub shooter_team: Option<Team>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HitKind {
     Ricochet,
@@ -142,6 +154,7 @@ impl Plugin for BallisticsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HitLog>()
             .add_message::<ArmorImpactMessage>()
+            .add_message::<TerrainImpactMessage>()
             .add_systems(
                 FixedUpdate,
                 step_projectiles
@@ -202,6 +215,7 @@ fn step_projectiles(
     assets: Option<Res<VoxelAssets>>,
     mut log: ResMut<HitLog>,
     mut impacts: MessageWriter<ArmorImpactMessage>,
+    mut terrain_impacts: MessageWriter<TerrainImpactMessage>,
     mut seed: Local<u64>,
 ) {
     let Some(assets) = assets else { return };
@@ -316,7 +330,7 @@ fn step_projectiles(
                     outcome,
                 });
 
-                debris_count += 8;
+                debris_count += 3;
                 spawn_debris_burst(
                     &mut commands,
                     &assets,
@@ -324,8 +338,8 @@ fn step_projectiles(
                     point,
                     normal,
                     Material::TargetSteel,
-                    8,
-                    0.3,
+                    3,
+                    0.22,
                     &mut rng,
                 );
                 if outcome == ImpactOutcome::Ricochet && shell.bounces < MAX_BOUNCES {
@@ -343,17 +357,27 @@ fn step_projectiles(
             Impact::Voxel { hit, .. } => {
                 if hit.material.is_destructible() {
                     let res = world.carve_sphere(hit.point + dir * 0.25, CRATER_RADIUS);
+                    let removed_count = res.removed.len();
                     if shell.shooter_team != Some(Team::Enemy) {
                         log.push(
                             HitKind::Structure,
                             format!(
                                 "Постройка ({:?}): разрушено {} вокселей",
                                 hit.material,
-                                res.removed.len()
+                                removed_count
                             ),
                         );
                     }
-                    let step = (res.removed.len() / 30).max(1);
+                    terrain_impacts.write(TerrainImpactMessage {
+                        point: hit.point,
+                        normal: hit.normal,
+                        material: hit.material,
+                        destructible: true,
+                        removed_count,
+                        caliber_mm: shell.spec.caliber_mm,
+                        shooter_team: shell.shooter_team,
+                    });
+                    let step = (removed_count / 30).max(1);
                     for (v, m) in res.removed.iter().step_by(step) {
                         debris_count += 1;
                         let p = world.grid.voxel_center(*v);
@@ -374,6 +398,15 @@ fn step_projectiles(
                     if shell.shooter_team != Some(Team::Enemy) {
                         log.push(HitKind::Terrain, "Рельеф: снаряд застрял".to_string());
                     }
+                    terrain_impacts.write(TerrainImpactMessage {
+                        point: hit.point,
+                        normal: hit.normal,
+                        material: hit.material,
+                        destructible: false,
+                        removed_count: 0,
+                        caliber_mm: shell.spec.caliber_mm,
+                        shooter_team: shell.shooter_team,
+                    });
                     debris_count += 6;
                     spawn_debris_burst(
                         &mut commands,

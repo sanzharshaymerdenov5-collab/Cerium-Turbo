@@ -120,19 +120,26 @@ impl VoxelGrid {
         self.dims.as_vec3() * self.voxel_size
     }
 
-    /// Высота (координата Y в метрах) верхней поверхности колонны (x,z)
-    /// на мировой точке; `None` если вне сетки или колонна пуста.
-    pub fn surface_height_at(&self, x: f32, z: f32) -> Option<f32> {
+    /// Высота (Y, м) и материал верхней поверхности колонны `(x, z)`.
+    pub fn surface_height_and_material_at(&self, x: f32, z: f32) -> Option<(f32, Material)> {
         let v = self.world_to_voxel(Vec3::new(x, self.origin.y, z));
         if v.x < 0 || v.z < 0 || v.x >= self.dims.x as i32 || v.z >= self.dims.z as i32 {
             return None;
         }
         for y in (0..self.dims.y as i32).rev() {
-            if self.is_solid(IVec3::new(v.x, y, v.z)) {
-                return Some(self.origin.y + (y + 1) as f32 * self.voxel_size);
+            let p = IVec3::new(v.x, y, v.z);
+            let mat = self.get(p);
+            if !mat.is_air() {
+                return Some((self.origin.y + (y + 1) as f32 * self.voxel_size, mat));
             }
         }
         None
+    }
+
+    /// Высота (координата Y в метрах) верхней поверхности колонны (x,z)
+    /// на мировой точке; `None` если вне сетки или колонна пуста.
+    pub fn surface_height_at(&self, x: f32, z: f32) -> Option<f32> {
+        self.surface_height_and_material_at(x, z).map(|(h, _)| h)
     }
 
     /// Луч по сетке (Amanatides–Woo DDA). `dir` нормализуется внутри.

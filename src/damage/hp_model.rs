@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use bevy::prelude::*;
 
 use super::modules::{ModuleKind, ModuleState, TankModules};
+use super::{TankActionKind, TankActionMessage, TankDestroyedMessage};
 use crate::ballistics::penetration::{ImpactOutcome, evaluate_impact, penetration_at};
 use crate::ballistics::shell::ShellSpec;
 use crate::ballistics::{ArmorImpactMessage, HitKind, HitLog};
@@ -146,11 +147,19 @@ pub fn handle_arcade_hp_impacts(
     mut commands: Commands,
     mode: Res<DamageRulesMode>,
     mut impacts: MessageReader<ArmorImpactMessage>,
-    mut tanks: Query<(&GlobalTransform, &mut TankHealth, &mut TankModules, &mut TankCombat)>,
-    mut turrets: Query<(&GlobalTransform, &mut Transform, &TurretPivot)>,
+    mut tanks: Query<(
+        &GlobalTransform,
+        &mut TankHealth,
+        &mut TankModules,
+        &mut TankCombat,
+        Option<&PlayerTank>,
+    )>,
+    turrets: Query<(&GlobalTransform, &TurretPivot)>,
     mut log: ResMut<HitLog>,
     mut feed: ResMut<DamageFeed>,
     assets: Option<Res<VoxelAssets>>,
+    mut destroyed_w: MessageWriter<TankDestroyedMessage>,
+    mut action_w: MessageWriter<TankActionMessage>,
     mut seed: Local<u64>,
 ) {
     if *mode != DamageRulesMode::ArcadeHpAndModules {
@@ -161,7 +170,8 @@ pub fn handle_arcade_hp_impacts(
         let Some(tank_ent) = msg.owner_tank else {
             continue;
         };
-        let Ok((hull_gt, mut health, mut modules, mut combat)) = tanks.get_mut(tank_ent) else {
+        let Ok((hull_gt, mut health, mut modules, mut combat, player_opt)) = tanks.get_mut(tank_ent)
+        else {
             continue;
         };
         if !combat.alive || msg.shooter_team == Some(combat.team) {
@@ -191,11 +201,12 @@ pub fn handle_arcade_hp_impacts(
         health.hp = (health.hp - hp_dmg).max(0.0);
 
         let mut ammo_detonated = false;
+        let was_burning = modules.fire_timer > 0.0;
         let mut damaged_names: Vec<&'static str> = Vec::new();
         let turret_gt = turrets
             .iter()
-            .find(|(_, _, tp)| tp.tank == tank_ent)
-            .map(|(gt, _, _)| *gt);
+            .find(|(_, tp)| tp.tank == tank_ent)
+            .map(|(gt, _)| *gt);
         let local_hit_y = msg.hit_point.y - hull_gt.translation().y;
 
         // Трассировка остаточного кинетического пробоя сплошного снаряда внутри корпуса/башни.
@@ -228,16 +239,17 @@ pub fn handle_arcade_hp_impacts(
             }
         }
 
+        if !was_burning && modules.fire_timer > 0.0 && health.hp > 0.0 && !ammo_detonated {
+            action_w.write(TankActionMessage {
+                tank: tank_ent,
+                pos: hull_gt.translation(),
+                is_player: player_opt.is_some(),
+                kind: TankActionKind::FireStarted,
+            });
+        }
+
         if ammo_detonated {
             health.hp = 0.0;
-            // Визуально срываем башню чуть вверх при детонации БК.
-            for (_, mut t_tf, tp) in &mut turrets {
-                if tp.tank == tank_ent {
-                    t_tf.translation.y += 1.4;
-                    t_tf.rotate_z(0.28);
-                    t_tf.rotate_x(-0.18);
-                }
-            }
         }
 
         let zone_ru = msg.zone.map_or("броню", |z| z.ru_name());
@@ -250,6 +262,12 @@ pub fn handle_arcade_hp_impacts(
                 assets.as_deref(),
                 &mut rng,
             );
+            destroyed_w.write(TankDestroyedMessage {
+                tank: tank_ent,
+                pos: hull_gt.translation(),
+                team: combat.team,
+                ammo_detonated,
+            });
             let reason = if ammo_detonated {
                 "ДЕТОНАЦИЯ БОЕУКЛАДКИ"
             } else {
@@ -282,12 +300,14 @@ pub fn handle_arcade_hp_impacts(
 }
 
 /// Тикает авторемонт модулей, пожар по ХП и ручные расходники (`[5]` / `[6]`).
+#[allow(clippy::too_many_arguments)]
 pub fn tick_modules_repair_and_fire(
     mut commands: Commands,
     time: Res<Time>,
     mode: Res<DamageRulesMode>,
     keys: Res<ButtonInput<KeyCode>>,
     mut tanks: Query<(
+        Entity,
         &GlobalTransform,
         &mut TankHealth,
         &mut TankModules,
@@ -297,6 +317,8 @@ pub fn tick_modules_repair_and_fire(
     mut log: ResMut<HitLog>,
     mut feed: ResMut<DamageFeed>,
     assets: Option<Res<VoxelAssets>>,
+    mut destroyed_w: MessageWriter<TankDestroyedMessage>,
+    mut action_w: MessageWriter<TankActionMessage>,
     mut fire_log_cd: Local<f32>,
     mut seed: Local<u64>,
 ) {
@@ -318,19 +340,26 @@ pub fn tick_modules_repair_and_fire(
 
     *fire_log_cd = (*fire_log_cd - dt).max(0.0);
 
-    for (gt, mut health, mut modules, mut combat, is_player) in &mut tanks {
+    for (tank_ent, gt, mut health, mut modules, mut combat, is_player) in &mut tanks {
         if !combat.alive {
             continue;
         }
+        let player_flag = is_player.is_some();
 
         // Расходники игрока: [5] ремкомплект, [6] огнетушитель.
-        if is_player.is_some() {
+        if player_flag {
             if keys.just_pressed(KeyCode::Digit5) && modules.repair_charges > 0 {
                 let needs = modules.modules.iter().any(|m| m.state != ModuleState::Intact);
                 if needs {
                     modules.repair_charges -= 1;
                     modules.repair_all();
                     feed.push("Ремкомплект: модули починены", false);
+                    action_w.write(TankActionMessage {
+                        tank: tank_ent,
+                        pos: gt.translation(),
+                        is_player: true,
+                        kind: TankActionKind::RepairUsed,
+                    });
                 }
             }
             if keys.just_pressed(KeyCode::Digit6)
@@ -340,6 +369,12 @@ pub fn tick_modules_repair_and_fire(
                 modules.extinguisher_charges -= 1;
                 modules.fire_timer = 0.0;
                 feed.push("Пожар потушен!", false);
+                action_w.write(TankActionMessage {
+                    tank: tank_ent,
+                    pos: gt.translation(),
+                    is_player: true,
+                    kind: TankActionKind::FireExtinguished,
+                });
             }
         }
 
@@ -351,8 +386,14 @@ pub fn tick_modules_repair_and_fire(
                     m.state = ModuleState::Damaged;
                     m.hp = m.max_hp * 0.45;
                     m.repair_timer = 0.0;
-                    if is_player.is_some() {
+                    if player_flag {
                         feed.push(format!("{}: отремонтировано (жёлт.)", m.kind.ru_short()), false);
+                        action_w.write(TankActionMessage {
+                            tank: tank_ent,
+                            pos: gt.translation(),
+                            is_player: true,
+                            kind: TankActionKind::AutoRepaired,
+                        });
                     }
                 }
             }
@@ -374,6 +415,12 @@ pub fn tick_modules_repair_and_fire(
                         assets.as_deref(),
                         &mut rng,
                     );
+                    destroyed_w.write(TankDestroyedMessage {
+                        tank: tank_ent,
+                        pos: gt.translation(),
+                        team: combat.team,
+                        ammo_detonated: false,
+                    });
                     log.push(
                         HitKind::Penetration,
                         format!("{} сгорел от пожара топливных баков!", combat.tank_name),
@@ -425,6 +472,8 @@ mod tests {
             0.5,
         )))
         .add_message::<ArmorImpactMessage>()
+        .add_message::<TankDestroyedMessage>()
+        .add_message::<TankActionMessage>()
         .add_systems(
             Update,
             (handle_arcade_hp_impacts, tick_modules_repair_and_fire).chain(),

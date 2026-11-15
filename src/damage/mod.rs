@@ -25,12 +25,40 @@ pub use modules::{ModuleKind, ModuleState, TankModules};
 pub use spall::{compute_residual_penetration, generate_spall_rays, spall_cone_params};
 pub use wt_model::XRayHitReport;
 
+/// Событие уничтожения танка (для детонации БК, сброса башни, дыма и звука).
+#[derive(Message, Debug, Clone)]
+pub struct TankDestroyedMessage {
+    pub tank: Entity,
+    pub pos: Vec3,
+    pub team: Team,
+    pub ammo_detonated: bool,
+}
+
+/// Действия с пожаром и ремонтом модулей (для частиц пены/огня и звука).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TankActionKind {
+    FireStarted,
+    FireExtinguished,
+    RepairUsed,
+    AutoRepaired,
+}
+
+#[derive(Message, Debug, Clone)]
+pub struct TankActionMessage {
+    pub tank: Entity,
+    pub pos: Vec3,
+    pub is_player: bool,
+    pub kind: TankActionKind,
+}
+
 pub struct DamagePlugin;
 
 impl Plugin for DamagePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DamageFeed>()
             .init_resource::<XRayHitReport>()
+            .add_message::<TankDestroyedMessage>()
+            .add_message::<TankActionMessage>()
             .add_systems(
                 Update,
                 (
@@ -56,6 +84,7 @@ fn handle_prototype_impacts(
     mut tanks: Query<(&GlobalTransform, &mut TankCombat)>,
     mut log: ResMut<HitLog>,
     assets: Option<Res<VoxelAssets>>,
+    mut destroyed_w: MessageWriter<TankDestroyedMessage>,
     mut seed: Local<u64>,
 ) {
     if *mode != DamageRulesMode::PrototypeTargets {
@@ -94,6 +123,12 @@ fn handle_prototype_impacts(
                     combat.tank_name, zone, combat.prototype_hits, combat.prototype_max_hits
                 ),
             );
+            destroyed_w.write(TankDestroyedMessage {
+                tank: tank_ent,
+                pos: gt.translation(),
+                team: combat.team,
+                ammo_detonated: false,
+            });
             if let Some(assets) = &assets {
                 *seed = seed.wrapping_add(0xD1B5_4A32_D192_ED03);
                 let mut rng = Rng::new(*seed | 1);

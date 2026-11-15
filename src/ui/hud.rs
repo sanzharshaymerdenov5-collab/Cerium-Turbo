@@ -1,18 +1,29 @@
 //! Боевой HUD: телеметрия танка, ХП и кукла модулей (Этап 3), цветной маркер пробития,
 //! всплывающий фид урона, дальномер, снайперский прицел и лог попаданий.
 
+use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
 
-use crate::ballistics::HitLog;
-use crate::ballistics::penetration::{effective_armor_mm, penetration_at};
+use crate::audio::{AudioSettings, SoundPreset, UiSoundMessage};
+use crate::ballistics::penetration::{ImpactOutcome, effective_armor_mm, penetration_at};
+use crate::ballistics::{ArmorImpactMessage, HitLog};
 use crate::core::{BattleStatus, DamageRulesMode, GameState, Team};
 use crate::damage::{
-    CrewRole, CrewState, DamageFeed, ModuleKind, ModuleState, PenIndicator, TankCrew, TankHealth,
-    TankModules, classify_penetration,
+    CrewRole, CrewState, DamageFeed, ModuleKind, ModuleState, PenIndicator, TankCrew,
+    TankDestroyedMessage, TankHealth, TankModules, classify_penetration,
 };
 use crate::tank::{AimTarget, PlayerTank, TankCamera, TankCombat, TankRoot, TankState};
 
 const MAX_ENEMY_MARKERS: usize = 8;
+
+/// Кратковременная визуальная вспышка хит-маркера на перекрестии при попадании.
+#[derive(Resource, Debug, Default)]
+pub struct HudHitMarker {
+    pub timer: f32,
+    pub is_pen: bool,
+    pub is_kill: bool,
+    pub badge: String,
+}
 
 const ALL_MODULES: [ModuleKind; 7] = [
     ModuleKind::LeftTrack,
@@ -34,7 +45,9 @@ const ALL_CREW: [CrewRole; 4] = [
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub enum HudText {
     Telemetry,
+    Controls,
     Crosshair,
+    HitFlash,
     Aim,
     DamageFeed,
     HitLog,
@@ -52,6 +65,7 @@ pub enum HudPanel {
     HullHp,
     WtStatus,
     HpBarFill,
+    ReloadBarFill,
     FireAlert,
     WtFireAlert,
     ModuleBox(ModuleKind),
@@ -62,6 +76,7 @@ pub enum HudPanel {
 }
 
 pub fn setup_hud(mut commands: Commands) {
+    commands.insert_resource(HudHitMarker::default());
     commands
         .spawn((
             Node {
@@ -75,7 +90,7 @@ pub fn setup_hud(mut commands: Commands) {
             DespawnOnExit(GameState::InBattle),
         ))
         .with_children(|root| {
-            // Верхняя строка: слева телеметрия, справа подсказка управления.
+            // Верхняя строка: слева телеметрия + шкала перезарядки, справа подсказка управления.
             root.spawn(Node {
                 width: Val::Percent(100.0),
                 justify_content: JustifyContent::SpaceBetween,
@@ -87,6 +102,8 @@ pub fn setup_hud(mut commands: Commands) {
                     Node {
                         padding: UiRect::all(Val::Px(12.0)),
                         border: UiRect::all(Val::Px(1.0)),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(6.0),
                         ..default()
                     },
                     BackgroundColor(Color::srgba(0.05, 0.07, 0.09, 0.78)),
@@ -99,6 +116,29 @@ pub fn setup_hud(mut commands: Commands) {
                         TextFont::from_font_size(15.0),
                         TextColor(Color::srgb(0.90, 0.95, 0.88)),
                     ));
+                    // Полоса прогресса перезарядки орудия.
+                    p.spawn((
+                        Node {
+                            width: Val::Percent(100.0),
+                            height: Val::Px(6.0),
+                            border: UiRect::all(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(0.10, 0.12, 0.14, 0.90)),
+                        BorderColor::all(Color::srgb(0.24, 0.30, 0.34)),
+                    ))
+                    .with_children(|bar| {
+                        bar.spawn((
+                            HudPanel::ReloadBarFill,
+                            Node {
+                                width: Val::Percent(100.0),
+                                height: Val::Percent(100.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.28, 0.84, 0.40)),
+                            Visibility::Inherited,
+                        ));
+                    });
                 });
 
                 top.spawn((
@@ -112,9 +152,10 @@ pub fn setup_hud(mut commands: Commands) {
                 ))
                 .with_children(|p| {
                     p.spawn((
+                        HudText::Controls,
                         Text::new(
                             "WASD: ход/поворот  |  Мышь: башня/прицел  |  ЛКМ/Пробел: огонь\n\
-                             Shift: снайперский  |  5: Ремкомпл.  |  6: Огнетуш.  |  R: на гусеницы  |  Tab: ангар (режим [M])",
+                             Shift: снайперский  |  5: Ремкомпл.  |  6: Огнетуш.  |  R: на гусеницы  |  N: звук  |  Tab: ангар",
                         ),
                         TextFont::from_font_size(12.5),
                         TextColor(Color::srgb(0.78, 0.83, 0.88)),
@@ -122,7 +163,7 @@ pub fn setup_hud(mut commands: Commands) {
                 });
             });
 
-            // Центр: цветное перекрестие, дальномер и всплывающий фид урона.
+            // Центр: цветное перекрестие, хит-маркер, дальномер и всплывающий фид урона.
             root.spawn(Node {
                 width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
@@ -136,6 +177,12 @@ pub fn setup_hud(mut commands: Commands) {
                     Text::new("+"),
                     TextFont::from_font_size(30.0),
                     TextColor(Color::srgba(0.95, 1.0, 0.4, 0.92)),
+                ));
+                center.spawn((
+                    HudText::HitFlash,
+                    Text::new(""),
+                    TextFont::from_font_size(13.5),
+                    TextColor(Color::srgb(1.0, 0.72, 0.24)),
                 ));
                 center.spawn((
                     HudText::Aim,
@@ -485,15 +532,29 @@ pub fn setup_hud(mut commands: Commands) {
     ));
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_hud(
+    time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     mut next_state: ResMut<NextState<GameState>>,
-    mode: Res<DamageRulesMode>,
-    aim: Res<AimTarget>,
-    log: Res<HitLog>,
-    feed: Res<DamageFeed>,
-    status: Res<BattleStatus>,
+    state: (
+        Res<DamageRulesMode>,
+        Res<AimTarget>,
+        Res<HitLog>,
+        Res<DamageFeed>,
+        Res<BattleStatus>,
+    ),
+    mut hit_marker: ResMut<HudHitMarker>,
+    mut msg_resources: (
+        Option<Res<Messages<ArmorImpactMessage>>>,
+        Option<Res<Messages<TankDestroyedMessage>>>,
+        Option<ResMut<Messages<UiSoundMessage>>>,
+        Option<Res<AudioSettings>>,
+    ),
+    mut cursors: (
+        Local<MessageCursor<ArmorImpactMessage>>,
+        Local<MessageCursor<TankDestroyedMessage>>,
+    ),
     player_q: Query<
         (
             &GlobalTransform,
@@ -517,9 +578,59 @@ pub fn update_hud(
         Option<&mut BorderColor>,
     )>,
 ) {
+    let (mode, aim, log, feed, status) = state;
     if keys.just_pressed(KeyCode::Tab) {
+        if let Some(ref mut ui_s) = msg_resources.2 {
+            ui_s.write(UiSoundMessage(SoundPreset::UiClick));
+        }
         next_state.set(GameState::Hangar);
         return;
+    }
+
+    let dt = time.delta_secs();
+    if hit_marker.timer > 0.0 {
+        hit_marker.timer = (hit_marker.timer - dt).max(0.0);
+    }
+
+    if let Some(ref msgs) = msg_resources.0 {
+        for msg in cursors.0.read(msgs) {
+            if msg.shooter_team == Some(Team::Player) && msg.owner_tank.is_some() {
+                match msg.outcome {
+                    ImpactOutcome::Penetration { .. } => {
+                        hit_marker.timer = 0.45;
+                        hit_marker.is_pen = true;
+                        hit_marker.is_kill = false;
+                        hit_marker.badge = "ПРОБИТИЕ!".to_string();
+                    }
+                    ImpactOutcome::Ricochet => {
+                        hit_marker.timer = 0.35;
+                        hit_marker.is_pen = false;
+                        hit_marker.is_kill = false;
+                        hit_marker.badge = "РИКОШЕТ".to_string();
+                    }
+                    ImpactOutcome::NoPenetration { .. } => {
+                        hit_marker.timer = 0.35;
+                        hit_marker.is_pen = false;
+                        hit_marker.is_kill = false;
+                        hit_marker.badge = "НЕ ПРОБИТ".to_string();
+                    }
+                }
+            }
+        }
+    }
+    if let Some(ref msgs) = msg_resources.1 {
+        for msg in cursors.1.read(msgs) {
+            if msg.team == Team::Enemy {
+                hit_marker.timer = 0.85;
+                hit_marker.is_pen = true;
+                hit_marker.is_kill = true;
+                hit_marker.badge = if msg.ammo_detonated {
+                    "ПОДРЫВ БК!".to_string()
+                } else {
+                    "УНИЧТОЖЕН!".to_string()
+                };
+            }
+        }
     }
 
     let cam_opt = cams.iter().next();
@@ -616,6 +727,16 @@ pub fn update_hud(
         String::new()
     };
 
+    let controls_str = format!(
+        "WASD: ход/поворот  |  Мышь: башня/прицел  |  ЛКМ/Пробел: огонь\n\
+         Shift: снайпер  |  5: Ремкомпл.  |  6: Огнетуш.  |  R: на гусеницы  |  Звук [N]: {}  |  Tab: ангар",
+        if msg_resources.3.as_ref().is_some_and(|a| a.muted) {
+            "ВЫКЛ"
+        } else {
+            "ВКЛ"
+        }
+    );
+
     let aim_str = {
         let err = aim.point.distance(aim.gun_point);
         let spread = if err < 0.8 { "СВЕДЁН" } else { "НАВОДКА..." };
@@ -661,19 +782,61 @@ pub fn update_hud(
     let hp_opt = player.and_then(|(_, _, _, _, h, _, _)| h);
     let mods_opt = player.and_then(|(_, _, _, _, _, m, _)| m);
     let crew_opt = player.and_then(|(_, _, _, _, _, _, c)| c);
+    let reload_info = player.map(|(_, root, st, combat, _, _, _)| {
+        let total = root.spec.reload_s.max(0.1);
+        let progress = if !combat.alive || combat.gun_jammed {
+            0.0
+        } else if st.reload_timer <= 0.01 {
+            1.0
+        } else {
+            (1.0 - st.reload_timer / total).clamp(0.0, 1.0)
+        };
+        (progress, combat.alive && !combat.gun_jammed && st.reload_timer <= 0.01, combat.gun_jammed || !combat.alive)
+    });
 
     // Обновление текстовых элементов.
     for (tag, mut txt, color_opt) in &mut texts {
         match *tag {
             HudText::Telemetry => txt.0 = telemetry_str.clone(),
+            HudText::Controls => txt.0 = controls_str.clone(),
             HudText::Crosshair => {
-                if let Some(mut c) = color_opt {
-                    c.0 = match pen_ind {
-                        PenIndicator::Green => Color::srgb(0.28, 0.96, 0.36),
-                        PenIndicator::Yellow => Color::srgb(0.98, 0.82, 0.22),
-                        PenIndicator::Red => Color::srgb(0.96, 0.28, 0.26),
-                        PenIndicator::None => Color::srgba(0.95, 1.0, 0.4, 0.92),
-                    };
+                if hit_marker.timer > 0.0 {
+                    txt.0 = if hit_marker.is_pen { "×" } else { "◈" }.to_string();
+                    if let Some(mut c) = color_opt {
+                        c.0 = if hit_marker.is_kill {
+                            Color::srgb(1.0, 0.25, 0.20)
+                        } else if hit_marker.is_pen {
+                            Color::srgb(1.0, 0.84, 0.22)
+                        } else {
+                            Color::srgb(0.72, 0.88, 1.0)
+                        };
+                    }
+                } else {
+                    txt.0 = "+".to_string();
+                    if let Some(mut c) = color_opt {
+                        c.0 = match pen_ind {
+                            PenIndicator::Green => Color::srgb(0.28, 0.96, 0.36),
+                            PenIndicator::Yellow => Color::srgb(0.98, 0.82, 0.22),
+                            PenIndicator::Red => Color::srgb(0.96, 0.28, 0.26),
+                            PenIndicator::None => Color::srgba(0.95, 1.0, 0.4, 0.92),
+                        };
+                    }
+                }
+            }
+            HudText::HitFlash => {
+                if hit_marker.timer > 0.0 {
+                    txt.0 = hit_marker.badge.clone();
+                    if let Some(mut c) = color_opt {
+                        c.0 = if hit_marker.is_kill {
+                            Color::srgb(1.0, 0.36, 0.26)
+                        } else if hit_marker.is_pen {
+                            Color::srgb(1.0, 0.88, 0.32)
+                        } else {
+                            Color::srgb(0.76, 0.88, 1.0)
+                        };
+                    }
+                } else {
+                    txt.0.clear();
                 }
             }
             HudText::Aim => txt.0 = aim_str.clone(),
@@ -799,6 +962,7 @@ pub fn update_hud(
     let show_hp_panel = *mode == DamageRulesMode::ArcadeHpAndModules;
     let show_wt_panel = *mode == DamageRulesMode::ModulesOnlyWt;
     let on_fire = mods_opt.is_some_and(|m| m.fire_timer > 0.0);
+    let fire_pulse = (time.elapsed_secs() * 12.0).sin() * 0.5 + 0.5;
 
     for (panel, mut node, mut vis, bg_opt, border_opt) in &mut panels {
         match *panel {
@@ -848,6 +1012,20 @@ pub fn update_hud(
                     }
                 }
             }
+            HudPanel::ReloadBarFill => {
+                if let Some((progress, ready, broken)) = reload_info {
+                    node.width = Val::Percent(if broken { 100.0 } else { progress * 100.0 });
+                    if let Some(mut bg) = bg_opt {
+                        bg.0 = if broken {
+                            Color::srgb(0.88, 0.24, 0.20)
+                        } else if ready {
+                            Color::srgb(0.26, 0.86, 0.42)
+                        } else {
+                            Color::srgb(0.96, 0.72, 0.22)
+                        };
+                    }
+                }
+            }
             HudPanel::FireAlert => {
                 let show = show_hp_panel && on_fire;
                 node.display = if show { Display::Flex } else { Display::None };
@@ -856,6 +1034,13 @@ pub fn update_hud(
                 } else {
                     Visibility::Hidden
                 };
+                if show && let Some(mut border) = border_opt {
+                    *border = BorderColor::all(Color::srgb(
+                        1.0,
+                        0.28 + fire_pulse * 0.45,
+                        0.12 + fire_pulse * 0.25,
+                    ));
+                }
             }
             HudPanel::WtFireAlert => {
                 let show = show_wt_panel && on_fire;
@@ -865,6 +1050,13 @@ pub fn update_hud(
                 } else {
                     Visibility::Hidden
                 };
+                if show && let Some(mut border) = border_opt {
+                    *border = BorderColor::all(Color::srgb(
+                        1.0,
+                        0.28 + fire_pulse * 0.45,
+                        0.12 + fire_pulse * 0.25,
+                    ));
+                }
             }
             HudPanel::ModuleBox(kind) => {
                 if let Some(mods) = mods_opt {

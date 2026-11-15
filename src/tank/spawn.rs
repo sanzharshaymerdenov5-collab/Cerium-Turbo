@@ -114,6 +114,13 @@ pub struct MuzzlePoint {
     pub tank: Entity,
 }
 
+/// Меш ствола (используется для анимации отката и наката при выстреле).
+#[derive(Component, Debug, Clone, Copy)]
+pub struct BarrelMesh {
+    pub tank: Entity,
+    pub rest_translation: Vec3,
+}
+
 /// Выпуклый коллайдер корпуса с приподнятым днищем и скошенными носом/кормой
 /// (чтобы подвеска несла танк, а нос не цеплялся за ступеньки вокселей).
 pub fn hull_collider(spec: &TankSpec) -> Collider {
@@ -224,6 +231,10 @@ pub fn spawn_tank(
     let barrel_vis = commands
         .spawn((
             Name::new("BarrelMesh"),
+            BarrelMesh {
+                tank: root,
+                rest_translation: parts.barrel.origin,
+            },
             voxel_model_bundle(&parts.barrel, meshes, assets),
         ))
         .id();

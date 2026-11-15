@@ -7,6 +7,6 @@ pub mod shell;
 
 pub use projectile::{
     ArmorImpactMessage, ArmorPlate, BallisticsPlugin, HitKind, HitLog, Projectile, TargetInfo,
-    spawn_projectile,
+    TerrainImpactMessage, spawn_projectile,
 };
 pub use shell::{ShellSpec, ShellType};

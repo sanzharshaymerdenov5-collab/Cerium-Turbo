@@ -2133,9 +2133,12 @@ dependencies = [
  "block-mesh",
  "dot_vox",
  "getrandom 0.3.4",
+ "js-sys",
  "ndshape",
  "ron 0.10.1",
  "serde",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

@@ -4,11 +4,24 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use super::armor::TankCombat;
-use super::spawn::{
-    GunPivot, MuzzlePoint, PlayerTank, Suspension, TankRoot, TankState,
-};
+use super::spawn::{GunPivot, MuzzlePoint, PlayerTank, Suspension, TankRoot, TankState};
+use super::spec::TurretShape;
 use crate::ballistics::{HitLog, spawn_projectile};
-use crate::voxel::{Material, Rng, VoxelAssets, VoxelWorld, spawn_debris_burst};
+use crate::core::Team;
+use crate::voxel::{Material, VoxelAssets, VoxelWorld};
+
+/// Событие выстрела танка (для эффектов дульной вспышки, отката ствола, тряски камеры и звука).
+#[derive(Message, Debug, Clone)]
+pub struct TankFiredMessage {
+    pub tank: Entity,
+    pub team: Option<Team>,
+    pub muzzle_pos: Vec3,
+    pub muzzle_dir: Vec3,
+    pub gun_pivot: Vec3,
+    pub caliber_mm: f32,
+    pub is_player: bool,
+    pub has_muzzle_brake: bool,
+}
 
 /// Чистая формула вертикальной силы пружинно-демпферной стойки:
 /// `compression > 0` — сжатие (м), `rel_vel_up` — скорость точки крепления вдоль нормали вверх (м/с).
@@ -237,15 +250,21 @@ pub fn tank_fire_system(
     time: Res<Time>,
     assets: Option<Res<VoxelAssets>>,
     mut log: ResMut<HitLog>,
-    mut tanks: Query<(&TankRoot, &mut TankState, Option<&TankCombat>, Forces)>,
+    mut tanks: Query<(
+        &TankRoot,
+        &mut TankState,
+        Option<&TankCombat>,
+        Option<&PlayerTank>,
+        Forces,
+    )>,
     guns: Query<(&GlobalTransform, &GunPivot)>,
     muzzles: Query<(&GlobalTransform, &MuzzlePoint)>,
-    mut seed: Local<u64>,
+    mut fired_w: MessageWriter<TankFiredMessage>,
 ) {
     let Some(assets) = assets else { return };
     let dt = time.delta_secs();
 
-    for (root, mut st, combat, mut forces) in &mut tanks {
+    for (root, mut st, combat, player_opt, mut forces) in &mut tanks {
         let alive = combat.is_none_or(|c| c.alive);
         let jammed = combat.is_some_and(|c| c.gun_jammed);
         let reload_mult = combat.map_or(1.0, |c| c.reload_mult.max(0.5));
@@ -260,7 +279,7 @@ pub fn tank_fire_system(
             continue;
         }
         st.reload_timer = root.spec.reload_s * reload_mult;
-        if team != Some(crate::core::Team::Enemy) {
+        if team != Some(Team::Enemy) {
             log.shots += 1;
         }
 
@@ -280,21 +299,6 @@ pub fn tank_fire_system(
             team,
         );
 
-        // Дульная вспышка / дым.
-        *seed = seed.wrapping_add(0x517C_C1B7_2722_0A95);
-        let mut rng = Rng::new(*seed | 1);
-        spawn_debris_burst(
-            &mut commands,
-            &assets,
-            0,
-            origin,
-            dir,
-            Material::Sand,
-            6,
-            0.25,
-            &mut rng,
-        );
-
         // Импульс отдачи в точке цапф орудия.
         let recoil_pt = guns
             .iter()
@@ -302,6 +306,21 @@ pub fn tank_fire_system(
             .map(|(gt, _)| gt.translation())
             .unwrap_or(origin);
         forces.apply_linear_impulse_at_point(-dir * root.spec.recoil_impulse_ns, recoil_pt);
+
+        let has_muzzle_brake = matches!(
+            root.spec.profile.turret_shape,
+            TurretShape::BoxHeavy | TurretShape::RoundedDome
+        );
+        fired_w.write(TankFiredMessage {
+            tank: root.entity,
+            team,
+            muzzle_pos: origin,
+            muzzle_dir: dir,
+            gun_pivot: recoil_pt,
+            caliber_mm: root.spec.shell.caliber_mm,
+            is_player: player_opt.is_some(),
+            has_muzzle_brake,
+        });
     }
 }
 
