@@ -97,17 +97,23 @@ pub fn setup_xray_hit_cam(mut commands: Commands) {
             XRayHitCamPanel,
             Node {
                 position_type: PositionType::Absolute,
-                right: Val::Px(16.0),
-                top: Val::Px(105.0),
-                width: Val::Px(336.0),
+                right: Val::Px(14.0),
+                top: Val::Px(92.0),
+                width: Val::Px(342.0),
                 padding: UiRect::all(Val::Px(12.0)),
-                border: UiRect::all(Val::Px(2.0)),
+                border: UiRect {
+                    left: Val::Px(3.0),
+                    top: Val::Px(1.0),
+                    right: Val::Px(1.0),
+                    bottom: Val::Px(1.0),
+                },
+                border_radius: BorderRadius::all(Val::Px(4.0)),
                 flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(5.0),
+                row_gap: Val::Px(6.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.04, 0.06, 0.08, 0.90)),
-            BorderColor::all(Color::srgb(0.85, 0.56, 0.20)),
+            BackgroundColor(Color::srgba(0.04, 0.055, 0.075, 0.90)),
+            BorderColor::all(Color::srgb(0.88, 0.54, 0.18)),
             Visibility::Hidden,
             DespawnOnExit(GameState::InBattle),
         ))
@@ -115,25 +121,38 @@ pub fn setup_xray_hit_cam(mut commands: Commands) {
             p.spawn((
                 XRayHitCamText::Title,
                 Text::new("WT X-RAY HIT-CAM"),
-                TextFont::from_font_size(15.0),
+                TextFont::from_font_size(14.5),
                 TextColor(Color::srgb(1.0, 0.84, 0.36)),
             ));
             p.spawn((
                 XRayHitCamText::Details,
                 Text::new(""),
-                TextFont::from_font_size(12.5),
+                TextFont::from_font_size(12.0),
                 TextColor(Color::srgb(0.86, 0.92, 0.96)),
             ));
             p.spawn((
-                XRayHitCamText::Schematic,
-                Text::new(""),
-                TextFont::from_font_size(12.0),
-                TextColor(Color::srgb(0.75, 0.94, 0.80)),
-            ));
+                Node {
+                    padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    align_self: AlignSelf::FlexStart,
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.02, 0.03, 0.045, 0.88)),
+                BorderColor::all(Color::srgba(0.28, 0.36, 0.44, 0.78)),
+            ))
+            .with_children(|box_node| {
+                box_node.spawn((
+                    XRayHitCamText::Schematic,
+                    Text::new(""),
+                    TextFont::from_font_size(12.0),
+                    TextColor(Color::srgb(0.76, 0.95, 0.82)),
+                ));
+            });
             p.spawn((
                 XRayHitCamText::DamagedList,
                 Text::new(""),
-                TextFont::from_font_size(12.5),
+                TextFont::from_font_size(12.0),
                 TextColor(Color::srgb(1.0, 0.78, 0.62)),
             ));
         });

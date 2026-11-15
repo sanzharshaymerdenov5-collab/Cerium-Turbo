@@ -42,7 +42,7 @@ pub fn build_app() -> App {
         DefaultPlugins
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "Cerium-Turbo".into(),
+                    title: "Cerium-Turbo v1.2".into(),
                     canvas: Some("#bevy".into()),
                     fit_canvas_to_parent: true,
                     prevent_default_event_handling: true,

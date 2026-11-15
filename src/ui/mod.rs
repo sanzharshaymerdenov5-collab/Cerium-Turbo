@@ -53,7 +53,7 @@ mod tests {
         ))
         .add_plugins(UiPlugin);
 
-        let txt = "Т-34-85 • ЭКИПАЖ ┌─│═·└┐┘*X ▼ ←→";
+        let txt = "Т-34-85 • ЭКИПАЖ ┌─│═·└┐┘*X ▼◆◈■□ ←→×";
         let entity = app
             .world_mut()
             .spawn((
