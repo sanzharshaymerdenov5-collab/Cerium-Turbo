@@ -147,6 +147,7 @@ fn minimap_bg_color(biome: MapBiome) -> Color {
         MapBiome::Desert => Color::srgba(0.17, 0.14, 0.09, 0.90),
         MapBiome::Winter => Color::srgba(0.14, 0.18, 0.23, 0.90),
         MapBiome::Industrial => Color::srgba(0.09, 0.10, 0.13, 0.90),
+        MapBiome::Highland => Color::srgba(0.12, 0.16, 0.17, 0.90),
     }
 }
 
@@ -537,7 +538,7 @@ pub fn setup_hud(
                     score.spawn((
                         HudText::TeamStrip,
                         Text::new(format!(
-                            "СОЮЗ ■ ■ ■ ■ ■  |  {}  •  v1.4.1  |  ■ ■ ■ ■ ■ ВРАГ",
+                            "СОЮЗ ■ ■ ■ ■ ■  |  {}  •  v1.4.2  |  ■ ■ ■ ■ ■ ВРАГ",
                             map_spec.name
                         )),
                         TextFont::from_font_size(13.0),
@@ -1495,9 +1496,9 @@ pub fn update_hud(
         .collect::<Vec<_>>()
         .join(" ");
     let team_strip_str = if enemy_total == 0 {
-        format!("СОЮЗ {ally_icons}  |  {map_title} ({mode_short})  •  v1.4.1  |  МИШЕНИ")
+        format!("СОЮЗ {ally_icons}  |  {map_title} ({mode_short})  •  v1.4.2  |  МИШЕНИ")
     } else {
-        format!("СОЮЗ {ally_icons}  |  {map_title} ({mode_short})  •  v1.4.1  |  {enemy_icons} ВРАГ")
+        format!("СОЮЗ {ally_icons}  |  {map_title} ({mode_short})  •  v1.4.2  |  {enemy_icons} ВРАГ")
     };
 
     let controls_str = format!(
@@ -2251,7 +2252,7 @@ mod tests {
             .find(|(t, _)| **t == HudText::TeamStrip)
             .map(|(_, txt)| txt.0.clone())
             .expect("TeamStrip");
-        assert!(strip.contains("v1.4.1"), "ожидается v1.4.1: {strip}");
+        assert!(strip.contains("v1.4.2"), "ожидается v1.4.2: {strip}");
     }
 
     #[test]

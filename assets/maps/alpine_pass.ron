@@ -1,0 +1,76 @@
+(
+    id: "alpine_pass",
+    name: "Альпийский перевал",
+    description: "Высокогорная долина со снежным пиком в центре, двумя серпантинными ущельями, скалами и каменными дотами 5x5.",
+    biome: Highland,
+    voxel_size: 1.0,
+    dims: (224, 28, 384),
+    base_height_m: 3.0,
+    spawn_xz: (0.0, 152.0),
+    spawn_yaw_deg: 0.0,
+    flat_zones: [
+        // Южная и северная базы.
+        (min_xz: (-78.0, 134.0), max_xz: (78.0, 174.0)),
+        (min_xz: (-78.0, -174.0), max_xz: (78.0, -134.0)),
+        // Западное и восточное перевал-ущелья.
+        (min_xz: (-84.0, -138.0), max_xz: (-58.0, 138.0)),
+        (min_xz: (58.0, -138.0), max_xz: (84.0, 138.0)),
+        // Подходы к перевалам.
+        (min_xz: (-20.0, 48.0), max_xz: (20.0, 138.0)),
+        (min_xz: (-20.0, -138.0), max_xz: (20.0, -48.0)),
+    ],
+    ice_zones: [],
+    hills: [
+        // Главный заснеженный альпийский пик в центре.
+        (center_xz: (0.0, 0.0), radius_m: 34.0, height_m: 16.0),
+        // Скальные плечи перевала (закрывают диагональный LoS по бокам пика).
+        (center_xz: (-38.0, 14.0), radius_m: 26.0, height_m: 10.0),
+        (center_xz: (38.0, 14.0), radius_m: 26.0, height_m: 10.0),
+        (center_xz: (-38.0, -14.0), radius_m: 26.0, height_m: 10.0),
+        (center_xz: (38.0, -14.0), radius_m: 26.0, height_m: 10.0),
+        // Внешние высокогорные хребты.
+        (center_xz: (-98.0, 90.0), radius_m: 26.0, height_m: 14.0),
+        (center_xz: (98.0, 90.0), radius_m: 26.0, height_m: 14.0),
+        (center_xz: (-98.0, -90.0), radius_m: 26.0, height_m: 14.0),
+        (center_xz: (98.0, -90.0), radius_m: 26.0, height_m: 14.0),
+        // Плавные холмы у подходов.
+        (center_xz: (-30.0, 82.0), radius_m: 20.0, height_m: 4.5),
+        (center_xz: (30.0, -82.0), radius_m: 20.0, height_m: 4.5),
+    ],
+    ditches: [],
+    structures: [
+        // Каменные горные доты и наблюдательные посты.
+        Wall(min_xz: (-18.0, 114.0), max_xz: (-7.0, 116.0), height_m: 1.8, kind: Concrete),
+        Wall(min_xz: (7.0, 114.0), max_xz: (18.0, 116.0), height_m: 1.8, kind: Sandbag),
+        Wall(min_xz: (-18.0, -116.0), max_xz: (-7.0, -114.0), height_m: 1.8, kind: Concrete),
+        Wall(min_xz: (7.0, -116.0), max_xz: (18.0, -114.0), height_m: 1.8, kind: Sandbag),
+        House(center_xz: (-68.0, 0.0), size_xz: (8.0, 9.0), height_m: 4.5, kind: Concrete),
+        House(center_xz: (68.0, 0.0), size_xz: (8.0, 9.0), height_m: 4.5, kind: Wood),
+        House(center_xz: (-32.0, 56.0), size_xz: (8.0, 8.0), height_m: 4.2, kind: Brick),
+        House(center_xz: (32.0, -56.0), size_xz: (8.0, 8.0), height_m: 4.2, kind: Brick),
+    ],
+    targets: [],
+    ally_spawns: [
+        (pos_xz: (-46.0, 156.0), yaw_deg: 0.0, tank_id: Some("m24_chaffee")),
+        (pos_xz: (-22.0, 160.0), yaw_deg: 0.0, tank_id: Some("m4a3e8")),
+        (pos_xz: (22.0, 160.0), yaw_deg: 0.0, tank_id: Some("t34_85")),
+        (pos_xz: (46.0, 156.0), yaw_deg: 0.0, tank_id: Some("m26_pershing")),
+    ],
+    enemy_spawns: [
+        (pos_xz: (-46.0, -156.0), yaw_deg: 180.0, tank_id: Some("pz_2_c")),
+        (pos_xz: (-22.0, -160.0), yaw_deg: 180.0, tank_id: Some("pz_4")),
+        (pos_xz: (0.0, -152.0), yaw_deg: 180.0, tank_id: Some("panther")),
+        (pos_xz: (22.0, -160.0), yaw_deg: 180.0, tank_id: Some("tiger_1")),
+        (pos_xz: (46.0, -156.0), yaw_deg: 180.0, tank_id: Some("is_3")),
+    ],
+    waypoints: [
+        (-70.0, 60.0),
+        (70.0, 60.0),
+        (-70.0, -60.0),
+        (70.0, -60.0),
+        (0.0, 72.0),
+        (0.0, -72.0),
+        (-46.0, 84.0),
+        (46.0, -84.0),
+    ],
+)

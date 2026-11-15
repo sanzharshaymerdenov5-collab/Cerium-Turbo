@@ -1,8 +1,8 @@
 [package]
 name = "cerium_turbo"
-version = "1.4.1"
+version = "1.4.2"
 edition = "2024"
-description = "Cerium-Turbo v1.4.1: воксельный танковый экшен-симулятор на Rust (Bevy + Avian3D)"
+description = "Cerium-Turbo v1.4.2: воксельный танковый экшен-симулятор на Rust (Bevy + Avian3D)"
 license = "MIT OR Apache-2.0"
 
 [lib]

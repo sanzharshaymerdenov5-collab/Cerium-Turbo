@@ -19,9 +19,10 @@ use crate::voxel::{
 };
 pub use generate::{generate_map_grid, terrain_height_m};
 pub use spec::{
-    CITY_RUINS_RON, DESERT_CANYON_RON, EnemySpawnSpec, FROZEN_FORT_RON, MapBiome, MapSpec,
-    PROVING_GROUNDS_RON, RAIL_YARD_RON, RANDOM_MAP_ID, TargetSpec, available_maps, load_map_spec,
-    resolve_map_spec,
+    ALPINE_PASS_RON, BERLIN_PLAZA_RON, CITY_RUINS_RON, DESERT_CANYON_RON, EnemySpawnSpec,
+    FROZEN_FORT_RON, MapBiome, MapSpec, NORDIC_FJORD_RON, OASIS_CITADEL_RON,
+    PROKHOROVKA_RIDGE_RON, PROVING_GROUNDS_ID, PROVING_GROUNDS_RON, RAIL_YARD_RON, RANDOM_MAP_ID,
+    TargetSpec, available_maps, load_map_spec, random_map_pool, resolve_map_spec,
 };
 
 /// Итоговая карта текущего боя (с учётом режима выбора «Случайная»).
@@ -116,6 +117,7 @@ fn setup_battle_scene(
         MapBiome::Desert => Color::srgb(0.84, 0.78, 0.65),
         MapBiome::Winter => Color::srgb(0.74, 0.80, 0.88),
         MapBiome::Industrial => Color::srgb(0.45, 0.49, 0.55),
+        MapBiome::Highland => Color::srgb(0.66, 0.78, 0.90),
     };
     commands.insert_resource(ClearColor(sky));
     commands.insert_resource(GlobalAmbientLight {
@@ -286,31 +288,42 @@ mod tests {
     use bevy::time::TimeUpdateStrategy;
 
     #[test]
-    fn resolve_map_spec_random_selects_valid_maps_across_seeds() {
-        let valid_ids: Vec<String> = available_maps().into_iter().map(|m| m.id).collect();
+    fn resolve_map_spec_random_excludes_proving_grounds_and_selects_all_combat_maps() {
+        let pool_ids: Vec<String> = random_map_pool().into_iter().map(|m| m.id).collect();
+        assert_eq!(pool_ids.len(), 9, "в случайной выборке должно быть 9 боевых карт");
+        assert!(
+            !pool_ids.iter().any(|id| id == PROVING_GROUNDS_ID),
+            "Полигон не должен попадать в random_map_pool"
+        );
         let mut seen = std::collections::HashSet::new();
-        for seed in 0..16u64 {
+        for seed in 0..96u64 {
             let m = resolve_map_spec(RANDOM_MAP_ID, seed);
+            assert_ne!(
+                m.id, PROVING_GROUNDS_ID,
+                "при случайном выборе не должен выпадать Полигон (seed={seed})"
+            );
             assert!(
-                valid_ids.contains(&m.id),
+                pool_ids.contains(&m.id),
                 "некорректный id случайной карты: {}",
                 m.id
             );
             seen.insert(m.id);
         }
-        assert!(
-            seen.len() >= 2,
-            "случайный выбор карты должен давать разные локации: {seen:?}"
+        assert_eq!(
+            seen.len(),
+            pool_ids.len(),
+            "случайный выбор карты должен охватывать все 9 боевых локаций: {seen:?}"
         );
+        assert_eq!(resolve_map_spec("proving_grounds", 1).id, "proving_grounds");
         assert_eq!(resolve_map_spec("city_ruins", 5).id, "city_ruins");
     }
 
     use crate::tank::spawn::spawn_tank;
 
     #[test]
-    fn all_five_maps_enemy_spawns_are_reachable_on_nav_grid() {
+    fn all_maps_enemy_spawns_are_reachable_on_nav_grid() {
         let maps = available_maps();
-        assert_eq!(maps.len(), 5);
+        assert_eq!(maps.len(), 10);
         for spec in maps {
             let grid = generate_map_grid(&spec);
             let nav = VoxelNavGrid::from_grid(&grid, VoxelNavGrid::DEFAULT_CELL_M);
@@ -343,9 +356,9 @@ mod tests {
     }
 
     #[test]
-    fn all_five_maps_5v5_spawns_budget_and_zero_spawn_los() {
+    fn all_maps_5v5_spawns_budget_and_zero_spawn_los() {
         let maps = available_maps();
-        assert_eq!(maps.len(), 5);
+        assert_eq!(maps.len(), 10);
         for spec in maps {
             assert_eq!(spec.ally_spawns.len(), 4, "карта {} без 4 союзников", spec.id);
             assert_eq!(spec.enemy_spawns.len(), 5, "карта {} без 5 врагов", spec.id);

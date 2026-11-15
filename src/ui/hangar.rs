@@ -1,9 +1,9 @@
-//! Ангар в стиле World of Tanks (Обновление 1.4.1):
+//! Ангар в стиле World of Tanks (Обновление 1.4.2):
 //! - Промышленный 3D-цех со смотровой ямой, рельсами, кран-балкой, трубами, прожекторами и дымкой;
 //! - Экономика (серебро/опыт, награды за бой), дерево исследований 3 наций (СССР, Германия, США)
 //!   × V тиров с альтернативными ветками (18 исторических машин AP-Only);
 //! - Фильтры карусели по нациям и технике в ангаре, предпросмотр любой машины в 3D и X-Ray `[V]`,
-//!   переключение режимов `[M]`, выбор случайной карты `+10%` и 5 локаций 5v5.
+//!   переключение режимов `[M]`, выбор случайной карты `+10%` (без Полигона) и 10 локаций 5v5.
 
 #![allow(deprecated)]
 
@@ -18,7 +18,9 @@ use crate::audio::{AudioSettings, SoundPreset, UiSoundMessage};
 use crate::ballistics::penetration::{effective_armor_mm, penetration_at};
 use crate::core::{DamageRulesMode, GameState, SelectedMap, SelectedTank, TankId};
 use crate::damage::{CrewRole, ModuleKind, TankCrew, TankModules};
-use crate::maps::{MapBiome, MapSpec, RANDOM_MAP_ID, available_maps, load_map_spec};
+use crate::maps::{
+    MapBiome, MapSpec, RANDOM_MAP_ID, available_maps, load_map_spec, random_map_pool,
+};
 use crate::progression::{
     LastBattleReward, PlayerProgression, buy_tank, ensure_starters, has_prerequisite_researched,
     is_owned, is_researched, research_tank,
@@ -210,11 +212,12 @@ pub fn compute_tank_ratings(spec: &TankSpec) -> TankRatings {
 
 fn biome_short_ru(biome: MapBiome) -> &'static str {
     match biome {
-        MapBiome::Temperate => "Полигон",
+        MapBiome::Temperate => "Поля / холмы",
         MapBiome::City => "Город",
         MapBiome::Desert => "Пустыня",
         MapBiome::Winter => "Зима / лёд",
         MapBiome::Industrial => "Промзона",
+        MapBiome::Highland => "Горы / снег",
     }
 }
 
@@ -225,6 +228,7 @@ fn biome_accent(biome: MapBiome) -> Color {
         MapBiome::Desert => Color::srgb(0.92, 0.72, 0.30),
         MapBiome::Winter => Color::srgb(0.45, 0.80, 0.98),
         MapBiome::Industrial => Color::srgb(0.68, 0.74, 0.84),
+        MapBiome::Highland => Color::srgb(0.62, 0.84, 0.92),
     }
 }
 
@@ -269,9 +273,12 @@ fn map_brief_text(
     tanks: &[TankSpec],
 ) -> (String, String, Color) {
     if selected_map_id == RANDOM_MAP_ID {
+        let pool_count = random_map_pool().len();
         return (
             "Случайная карта  •  5v5 Автовыбор".to_string(),
-            "Перед началом боя 5v5 выбирается случайная локация из 5 расширенных карт.\nБонус случайной карты: +10% серебра и опыта".to_string(),
+            format!(
+                "Перед началом боя 5v5 выбирается случайная боевая локация ({pool_count} карт, без Полигона).\nБонус случайной карты: +10% серебра и опыта"
+            ),
             Color::srgb(0.95, 0.76, 0.36),
         );
     }
@@ -1568,7 +1575,7 @@ fn spawn_hangar_ui(
                             ))
                             .with_children(|b| {
                                 b.spawn((
-                                    Text::new("v1.4.1"),
+                                    Text::new("v1.4.2"),
                                     TextFont::from_font_size(11.5),
                                     TextColor(Color::srgb(1.0, 0.92, 0.78)),
                                 ));
@@ -1934,15 +1941,15 @@ fn spawn_hangar_ui(
                 ..default()
             })
             .with_children(|mid| {
-                // Левая панель WoT: режимы, инспекция и список локаций.
+                // Левая панель WoT: режимы, инспекция и сетка 10 локаций.
                 mid.spawn((
                     Node {
-                        width: Val::Px(232.0),
+                        width: Val::Px(312.0),
                         flex_direction: FlexDirection::Column,
                         padding: UiRect::all(Val::Px(9.0)),
                         border: UiRect::all(Val::Px(1.0)),
                         border_radius: BorderRadius::all(Val::Px(4.0)),
-                        row_gap: Val::Px(5.0),
+                        row_gap: Val::Px(4.0),
                         ..default()
                     },
                     BackgroundColor(Color::srgba(0.035, 0.05, 0.068, 0.82)),
@@ -1951,7 +1958,7 @@ fn spawn_hangar_ui(
                 .with_children(|left| {
                     left.spawn((
                         Text::new("РЕЖИМЫ И ИНСПЕКЦИЯ"),
-                        TextFont::from_font_size(10.5),
+                        TextFont::from_font_size(10.0),
                         TextColor(Color::srgb(0.64, 0.72, 0.80)),
                     ));
 
@@ -1960,7 +1967,7 @@ fn spawn_hangar_ui(
                         Interaction::default(),
                         HangarButton::ToggleMode,
                         Node {
-                            padding: UiRect::axes(Val::Px(9.0), Val::Px(6.0)),
+                            padding: UiRect::axes(Val::Px(9.0), Val::Px(5.0)),
                             border: UiRect::all(Val::Px(1.5)),
                             border_radius: BorderRadius::all(Val::Px(3.0)),
                             ..default()
@@ -1980,83 +1987,95 @@ fn spawn_hangar_ui(
                         b.spawn((
                             HangarLabel::ToggleMode,
                             Text::new(format!("Режим [M]: {}", mode.ru_label())),
-                            TextFont::from_font_size(12.0),
+                            TextFont::from_font_size(11.5),
                             TextColor(Color::WHITE),
                         ));
                     });
 
-                    // Кнопка X-Ray брони и экипажа.
-                    left.spawn((
-                        Interaction::default(),
-                        HangarButton::ToggleXray,
-                        Node {
-                            padding: UiRect::axes(Val::Px(9.0), Val::Px(5.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(3.0)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgb(0.11, 0.17, 0.25)),
-                        BorderColor::all(Color::srgb(0.42, 0.62, 0.82)),
-                    ))
-                    .with_children(|b| {
-                        b.spawn((
-                            HangarLabel::ToggleXray,
-                            Text::new(if view.xray_armor {
-                                "Броня/экипаж [V]: ВКЛ"
+                    // X-Ray брони [V] и автоповорот [O] в одну компактную строку.
+                    left.spawn(Node {
+                        width: Val::Percent(100.0),
+                        column_gap: Val::Px(4.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        row.spawn((
+                            Interaction::default(),
+                            HangarButton::ToggleXray,
+                            Node {
+                                flex_grow: 1.0,
+                                justify_content: JustifyContent::Center,
+                                padding: UiRect::axes(Val::Px(6.0), Val::Px(4.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                border_radius: BorderRadius::all(Val::Px(3.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.11, 0.17, 0.25)),
+                            BorderColor::all(Color::srgb(0.42, 0.62, 0.82)),
+                        ))
+                        .with_children(|b| {
+                            b.spawn((
+                                HangarLabel::ToggleXray,
+                                Text::new(if view.xray_armor {
+                                    "Броня [V]: ВКЛ"
+                                } else {
+                                    "Броня [V]"
+                                }),
+                                TextFont::from_font_size(10.5),
+                                TextColor(Color::srgb(0.86, 0.94, 1.0)),
+                            ));
+                        });
+
+                        row.spawn((
+                            Interaction::default(),
+                            HangarButton::ToggleSpin,
+                            Node {
+                                flex_grow: 1.0,
+                                justify_content: JustifyContent::Center,
+                                padding: UiRect::axes(Val::Px(6.0), Val::Px(4.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                border_radius: BorderRadius::all(Val::Px(3.0)),
+                                ..default()
+                            },
+                            BackgroundColor(if view.auto_spin {
+                                Color::srgb(0.18, 0.28, 0.36)
                             } else {
-                                "Броня/экипаж [V]"
+                                Color::srgba(0.08, 0.11, 0.15, 0.85)
                             }),
-                            TextFont::from_font_size(12.0),
-                            TextColor(Color::srgb(0.86, 0.94, 1.0)),
-                        ));
+                            BorderColor::all(Color::srgb(0.32, 0.42, 0.52)),
+                        ))
+                        .with_children(|b| {
+                            b.spawn((
+                                HangarLabel::ToggleSpin,
+                                Text::new(if view.auto_spin {
+                                    "Поворот [O]: ВКЛ"
+                                } else {
+                                    "Поворот [O]: ВЫКЛ"
+                                }),
+                                TextFont::from_font_size(10.5),
+                                TextColor(Color::srgb(0.80, 0.87, 0.94)),
+                            ));
+                        });
                     });
 
-                    // Кнопка автовращения танка на стенде.
-                    left.spawn((
-                        Interaction::default(),
-                        HangarButton::ToggleSpin,
-                        Node {
-                            padding: UiRect::axes(Val::Px(9.0), Val::Px(4.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(3.0)),
-                            ..default()
-                        },
-                        BackgroundColor(if view.auto_spin {
-                            Color::srgb(0.18, 0.28, 0.36)
-                        } else {
-                            Color::srgba(0.08, 0.11, 0.15, 0.85)
-                        }),
-                        BorderColor::all(Color::srgb(0.32, 0.42, 0.52)),
-                    ))
-                    .with_children(|b| {
-                        b.spawn((
-                            HangarLabel::ToggleSpin,
-                            Text::new(if view.auto_spin {
-                                "Поворот [O]: ВКЛ"
-                            } else {
-                                "Поворот [O]: ВЫКЛ"
-                            }),
-                            TextFont::from_font_size(11.5),
-                            TextColor(Color::srgb(0.80, 0.87, 0.94)),
-                        ));
-                    });
-
                     left.spawn((
                         Node {
-                            margin: UiRect::top(Val::Px(3.0)),
+                            margin: UiRect::top(Val::Px(2.0)),
                             ..default()
                         },
                         Text::new("КАРТА БОЯ [Q / E]"),
-                        TextFont::from_font_size(10.5),
+                        TextFont::from_font_size(10.0),
                         TextColor(Color::srgb(0.64, 0.72, 0.80)),
                     ));
 
                     let is_random = selected_map.0 == RANDOM_MAP_ID;
+                    let pool_count = random_map_pool().len();
                     left.spawn((
                         Interaction::default(),
                         HangarButton::SelectRandomMap,
                         Node {
-                            padding: UiRect::axes(Val::Px(9.0), Val::Px(4.0)),
+                            width: Val::Percent(100.0),
+                            padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
                             border: UiRect {
                                 left: Val::Px(if is_random { 3.0 } else { 1.0 }),
                                 top: Val::Px(1.0),
@@ -2080,58 +2099,69 @@ fn spawn_hangar_ui(
                     ))
                     .with_children(|b| {
                         b.spawn((
-                            Text::new("Случайная карта"),
-                            TextFont::from_font_size(12.0),
+                            Text::new("Случайная карта (+10%)"),
+                            TextFont::from_font_size(11.0),
                             TextColor(Color::srgb(0.98, 0.88, 0.56)),
                         ));
                         b.spawn((
-                            Text::new("Автовыбор (+10% награда)"),
-                            TextFont::from_font_size(10.0),
+                            Text::new(format!("{pool_count} боевых карт (без Полигона)")),
+                            TextFont::from_font_size(9.5),
                             TextColor(Color::srgb(0.76, 0.74, 0.62)),
                         ));
                     });
 
-                    for (i, m) in maps.iter().enumerate() {
-                        let active = m.id == selected_map.0;
-                        left.spawn((
-                            Interaction::default(),
-                            HangarButton::SelectMap(i),
-                            Node {
-                                padding: UiRect::axes(Val::Px(9.0), Val::Px(4.0)),
-                                border: UiRect {
-                                    left: Val::Px(if active { 3.0 } else { 1.0 }),
-                                    top: Val::Px(1.0),
-                                    right: Val::Px(1.0),
-                                    bottom: Val::Px(1.0),
+                    // Сетка 2×5 из всех 10 карт (легко помещается по высоте в 720p).
+                    left.spawn(Node {
+                        width: Val::Percent(100.0),
+                        flex_wrap: FlexWrap::Wrap,
+                        column_gap: Val::Px(4.0),
+                        row_gap: Val::Px(4.0),
+                        ..default()
+                    })
+                    .with_children(|grid| {
+                        for (i, m) in maps.iter().enumerate() {
+                            let active = m.id == selected_map.0;
+                            grid.spawn((
+                                Interaction::default(),
+                                HangarButton::SelectMap(i),
+                                Node {
+                                    width: Val::Px(144.0),
+                                    padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
+                                    border: UiRect {
+                                        left: Val::Px(if active { 3.0 } else { 1.0 }),
+                                        top: Val::Px(1.0),
+                                        right: Val::Px(1.0),
+                                        bottom: Val::Px(1.0),
+                                    },
+                                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                                    flex_direction: FlexDirection::Column,
+                                    ..default()
                                 },
-                                border_radius: BorderRadius::all(Val::Px(3.0)),
-                                flex_direction: FlexDirection::Column,
-                                ..default()
-                            },
-                            BackgroundColor(if active {
-                                Color::srgba(0.14, 0.24, 0.34, 0.94)
-                            } else {
-                                Color::srgba(0.06, 0.08, 0.11, 0.78)
-                            }),
-                            BorderColor::all(if active {
-                                biome_accent(m.biome)
-                            } else {
-                                Color::srgba(0.24, 0.30, 0.36, 0.75)
-                            }),
-                        ))
-                        .with_children(|b| {
-                            b.spawn((
-                                Text::new(m.name.clone()),
-                                TextFont::from_font_size(12.0),
-                                TextColor(Color::srgb(0.92, 0.95, 0.98)),
-                            ));
-                            b.spawn((
-                                Text::new(biome_short_ru(m.biome)),
-                                TextFont::from_font_size(10.0),
-                                TextColor(Color::srgb(0.64, 0.74, 0.84)),
-                            ));
-                        });
-                    }
+                                BackgroundColor(if active {
+                                    Color::srgba(0.14, 0.24, 0.34, 0.94)
+                                } else {
+                                    Color::srgba(0.06, 0.08, 0.11, 0.78)
+                                }),
+                                BorderColor::all(if active {
+                                    biome_accent(m.biome)
+                                } else {
+                                    Color::srgba(0.24, 0.30, 0.36, 0.75)
+                                }),
+                            ))
+                            .with_children(|b| {
+                                b.spawn((
+                                    Text::new(m.name.clone()),
+                                    TextFont::from_font_size(10.0),
+                                    TextColor(Color::srgb(0.92, 0.95, 0.98)),
+                                ));
+                                b.spawn((
+                                    Text::new(biome_short_ru(m.biome)),
+                                    TextFont::from_font_size(9.0),
+                                    TextColor(Color::srgb(0.64, 0.74, 0.84)),
+                                ));
+                            });
+                        }
+                    });
                 });
 
                 // Правая панель WoT: карточка карты/составов 5v5 + карточка ТТХ со шкалами.
@@ -3366,9 +3396,9 @@ pub fn update_hangar(
             }
             HangarLabel::ToggleXray => {
                 txt.0 = if view.xray_armor {
-                    "Броня/экипаж [V]: ВКЛ".to_string()
+                    "Броня [V]: ВКЛ".to_string()
                 } else {
-                    "Броня/экипаж [V]".to_string()
+                    "Броня [V]".to_string()
                 };
             }
             HangarLabel::ToggleSpin => {
@@ -3423,6 +3453,21 @@ mod tests {
         assert_eq!(
             filtered_carousel_indices(&tanks, &prog, HangarFilter::Nation(Nation::Usa)).len(),
             5
+        );
+    }
+
+    #[test]
+    fn hangar_random_brief_describes_nine_combat_maps_without_polygon() {
+        let maps = available_maps();
+        let pool = random_map_pool();
+        let tanks = available_tanks();
+        assert_eq!(maps.len(), 10);
+        assert_eq!(pool.len(), 9);
+        let (title, body, _) = map_brief_text(RANDOM_MAP_ID, &maps, &tanks);
+        assert!(title.contains("Случайная карта"));
+        assert!(
+            body.contains("9 карт") && body.contains("без Полигона"),
+            "брифинг случайной карты должен отражать 9 боевых карт без Полигона: {body}"
         );
     }
 }

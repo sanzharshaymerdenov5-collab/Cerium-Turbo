@@ -1,0 +1,72 @@
+(
+    id: "oasis_citadel",
+    name: "Оазис Цитадель",
+    description: "Песчаный форт с центральным двором-цитаделью, крепостными стенами и дюнами по флангам для прорывов 5x5.",
+    biome: Desert,
+    voxel_size: 0.75,
+    dims: (256, 24, 384),
+    base_height_m: 3.0,
+    spawn_xz: (0.0, 116.0),
+    spawn_yaw_deg: 0.0,
+    flat_zones: [
+        // Базы команд и крепостной двор.
+        (min_xz: (-84.0, 92.0), max_xz: (84.0, 132.0)),
+        (min_xz: (-84.0, -132.0), max_xz: (84.0, -92.0)),
+        (min_xz: (-36.0, -40.0), max_xz: (36.0, 40.0)),
+        // Фланговые караванные проходы.
+        (min_xz: (-86.0, -94.0), max_xz: (-64.0, 94.0)),
+        (min_xz: (64.0, -94.0), max_xz: (86.0, 94.0)),
+    ],
+    ice_zones: [],
+    hills: [
+        // Песчаные барханы по бокам цитадели (закрывают прострелы и задают рельеф).
+        (center_xz: (-48.0, 44.0), radius_m: 18.0, height_m: 5.5),
+        (center_xz: (48.0, 44.0), radius_m: 18.0, height_m: 5.5),
+        (center_xz: (-48.0, -44.0), radius_m: 18.0, height_m: 5.5),
+        (center_xz: (48.0, -44.0), radius_m: 18.0, height_m: 5.5),
+        (center_xz: (-48.0, 0.0), radius_m: 18.0, height_m: 6.5),
+        (center_xz: (48.0, 0.0), radius_m: 18.0, height_m: 6.5),
+    ],
+    ditches: [],
+    structures: [
+        // Внутренняя цитадель и крепостные ворота (исключают прямой LoS со спавна на спавн).
+        Wall(min_xz: (-18.0, -4.0), max_xz: (18.0, 4.0), height_m: 5.5, kind: Sandbag),
+        Wall(min_xz: (-36.0, 18.0), max_xz: (-8.0, 21.0), height_m: 5.0, kind: Brick),
+        Wall(min_xz: (8.0, 18.0), max_xz: (36.0, 21.0), height_m: 5.0, kind: Brick),
+        Wall(min_xz: (-36.0, -21.0), max_xz: (-8.0, -18.0), height_m: 5.0, kind: Brick),
+        Wall(min_xz: (8.0, -21.0), max_xz: (36.0, -18.0), height_m: 5.0, kind: Brick),
+        // Постройки в оазисе и передовые укрытия.
+        Wall(min_xz: (-16.0, 82.0), max_xz: (-5.0, 84.0), height_m: 1.7, kind: Sandbag),
+        Wall(min_xz: (5.0, 82.0), max_xz: (16.0, 84.0), height_m: 1.7, kind: Sandbag),
+        Wall(min_xz: (-16.0, -84.0), max_xz: (-5.0, -82.0), height_m: 1.7, kind: Sandbag),
+        Wall(min_xz: (5.0, -84.0), max_xz: (16.0, -82.0), height_m: 1.7, kind: Sandbag),
+        House(center_xz: (-24.0, 62.0), size_xz: (9.0, 9.0), height_m: 4.5, kind: Brick),
+        House(center_xz: (24.0, -62.0), size_xz: (9.0, 9.0), height_m: 4.5, kind: Brick),
+        House(center_xz: (24.0, 62.0), size_xz: (9.0, 9.0), height_m: 4.5, kind: Concrete),
+        House(center_xz: (-24.0, -62.0), size_xz: (9.0, 9.0), height_m: 4.5, kind: Concrete),
+    ],
+    targets: [],
+    ally_spawns: [
+        (pos_xz: (-48.0, 118.0), yaw_deg: 0.0, tank_id: Some("m3_stuart")),
+        (pos_xz: (-22.0, 120.0), yaw_deg: 0.0, tank_id: Some("m4a3e8")),
+        (pos_xz: (22.0, 120.0), yaw_deg: 0.0, tank_id: Some("m24_chaffee")),
+        (pos_xz: (48.0, 118.0), yaw_deg: 0.0, tank_id: Some("m26_pershing")),
+    ],
+    enemy_spawns: [
+        (pos_xz: (-48.0, -118.0), yaw_deg: 180.0, tank_id: Some("pz_3")),
+        (pos_xz: (-22.0, -120.0), yaw_deg: 180.0, tank_id: Some("pz_4")),
+        (pos_xz: (0.0, -116.0), yaw_deg: 180.0, tank_id: Some("tiger_1")),
+        (pos_xz: (22.0, -120.0), yaw_deg: 180.0, tank_id: Some("panther")),
+        (pos_xz: (48.0, -118.0), yaw_deg: 180.0, tank_id: Some("bt_7")),
+    ],
+    waypoints: [
+        (-74.0, 56.0),
+        (74.0, 56.0),
+        (-74.0, 0.0),
+        (74.0, 0.0),
+        (-74.0, -56.0),
+        (74.0, -56.0),
+        (0.0, 44.0),
+        (0.0, -44.0),
+    ],
+)

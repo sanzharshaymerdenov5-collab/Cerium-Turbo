@@ -77,16 +77,18 @@ pub enum MapBiome {
     Desert,
     Winter,
     Industrial,
+    Highland,
 }
 
 impl MapBiome {
     pub fn ru_name(self) -> &'static str {
         match self {
-            Self::Temperate => "Полигон (умеренный)",
+            Self::Temperate => "Поля и холмы (умеренный)",
             Self::City => "Городские руины",
             Self::Desert => "Пустыня / каньон",
             Self::Winter => "Зимний фронт (гололёд)",
             Self::Industrial => "Промзона / ЖД",
+            Self::Highland => "Горы / перевал (высокогорье)",
         }
     }
 }
@@ -134,11 +136,18 @@ impl MapSpec {
     }
 }
 
+pub const PROVING_GROUNDS_ID: &str = "proving_grounds";
+
 pub const PROVING_GROUNDS_RON: &str = include_str!("../../assets/maps/proving_grounds.ron");
 pub const CITY_RUINS_RON: &str = include_str!("../../assets/maps/city_ruins.ron");
 pub const DESERT_CANYON_RON: &str = include_str!("../../assets/maps/desert_canyon.ron");
 pub const FROZEN_FORT_RON: &str = include_str!("../../assets/maps/frozen_fort.ron");
 pub const RAIL_YARD_RON: &str = include_str!("../../assets/maps/rail_yard.ron");
+pub const PROKHOROVKA_RIDGE_RON: &str = include_str!("../../assets/maps/prokhorovka_ridge.ron");
+pub const ALPINE_PASS_RON: &str = include_str!("../../assets/maps/alpine_pass.ron");
+pub const BERLIN_PLAZA_RON: &str = include_str!("../../assets/maps/berlin_plaza.ron");
+pub const OASIS_CITADEL_RON: &str = include_str!("../../assets/maps/oasis_citadel.ron");
+pub const NORDIC_FJORD_RON: &str = include_str!("../../assets/maps/nordic_fjord.ron");
 
 pub const RANDOM_MAP_ID: &str = "random";
 
@@ -149,6 +158,11 @@ pub fn load_map_spec(id: &str) -> Option<MapSpec> {
         "desert_canyon" => MapSpec::from_ron(DESERT_CANYON_RON).ok(),
         "frozen_fort" => MapSpec::from_ron(FROZEN_FORT_RON).ok(),
         "rail_yard" => MapSpec::from_ron(RAIL_YARD_RON).ok(),
+        "prokhorovka_ridge" => MapSpec::from_ron(PROKHOROVKA_RIDGE_RON).ok(),
+        "alpine_pass" => MapSpec::from_ron(ALPINE_PASS_RON).ok(),
+        "berlin_plaza" => MapSpec::from_ron(BERLIN_PLAZA_RON).ok(),
+        "oasis_citadel" => MapSpec::from_ron(OASIS_CITADEL_RON).ok(),
+        "nordic_fjord" => MapSpec::from_ron(NORDIC_FJORD_RON).ok(),
         _ => None,
     }
 }
@@ -160,21 +174,36 @@ pub fn available_maps() -> Vec<MapSpec> {
         "desert_canyon",
         "frozen_fort",
         "rail_yard",
+        "prokhorovka_ridge",
+        "alpine_pass",
+        "berlin_plaza",
+        "oasis_citadel",
+        "nordic_fjord",
     ]
     .iter()
     .filter_map(|id| load_map_spec(id))
     .collect()
 }
 
+/// Боевые карты, участвующие в случайной выборке (`"Полигон"` исключён).
+pub fn random_map_pool() -> Vec<MapSpec> {
+    available_maps()
+        .into_iter()
+        .filter(|m| m.id != PROVING_GROUNDS_ID)
+        .collect()
+}
+
 /// Разрешает выбранный идентификатор карты (включая `RANDOM_MAP_ID = "random"`) в конкретную карту боя.
 pub fn resolve_map_spec(selected_id: &str, seed: u64) -> MapSpec {
-    let maps = available_maps();
-    if selected_id == RANDOM_MAP_ID && !maps.is_empty() {
-        let mut rng = crate::voxel::Rng::new(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
-        let idx = ((rng.next_u64() >> 32) as usize) % maps.len();
-        return maps[idx].clone();
+    if selected_id == RANDOM_MAP_ID {
+        let pool = random_map_pool();
+        if !pool.is_empty() {
+            let mut rng = crate::voxel::Rng::new(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let idx = ((rng.next_u64() >> 32) as usize) % pool.len();
+            return pool[idx].clone();
+        }
     }
     load_map_spec(selected_id)
-        .or_else(|| maps.into_iter().next())
+        .or_else(|| available_maps().into_iter().next())
         .expect("at least one built-in map must exist")
 }

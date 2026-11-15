@@ -1,0 +1,67 @@
+(
+    id: "berlin_plaza",
+    name: "Берлинский плацдарм",
+    description: "Разрушенная столичная площадь с центральным бетонным бункером, глубокими воронками и квартальными перекрёстками 5x5.",
+    biome: City,
+    voxel_size: 0.75,
+    dims: (256, 24, 384),
+    base_height_m: 2.25,
+    spawn_xz: (0.0, 116.0),
+    spawn_yaw_deg: 0.0,
+    flat_zones: [
+        (min_xz: (-86.0, -132.0), max_xz: (86.0, 132.0)),
+    ],
+    ice_zones: [],
+    hills: [],
+    ditches: [
+        // Воронки на боковых бульварах.
+        (min_xz: (-46.0, 22.0), max_xz: (-36.0, 32.0), depth_m: 0.75),
+        (min_xz: (36.0, -32.0), max_xz: (46.0, -22.0), depth_m: 0.75),
+    ],
+    structures: [
+        // Центральный мемориальный бункер + крылья (перекрывают прямой прострел со спавна на спавн).
+        Wall(min_xz: (-24.0, -6.0), max_xz: (24.0, 6.0), height_m: 6.5, kind: Concrete),
+        Wall(min_xz: (-56.0, -22.0), max_xz: (-26.0, -16.0), height_m: 5.5, kind: Brick),
+        Wall(min_xz: (26.0, -22.0), max_xz: (56.0, -16.0), height_m: 5.5, kind: Brick),
+        Wall(min_xz: (-56.0, 16.0), max_xz: (-26.0, 22.0), height_m: 5.5, kind: Brick),
+        Wall(min_xz: (26.0, 16.0), max_xz: (56.0, 22.0), height_m: 5.5, kind: Brick),
+        // Противотанковые баррикады на парадном проспекте.
+        Wall(min_xz: (-16.0, 78.0), max_xz: (-5.0, 80.5), height_m: 1.6, kind: Concrete),
+        Wall(min_xz: (5.0, 78.0), max_xz: (16.0, 80.5), height_m: 1.6, kind: Sandbag),
+        Wall(min_xz: (-16.0, -80.5), max_xz: (-5.0, -78.0), height_m: 1.6, kind: Sandbag),
+        Wall(min_xz: (5.0, -80.5), max_xz: (16.0, -78.0), height_m: 1.6, kind: Concrete),
+        // Министерства и руины кварталов.
+        House(center_xz: (-24.0, 48.0), size_xz: (14.0, 16.0), height_m: 6.5, kind: Brick),
+        House(center_xz: (24.0, 48.0), size_xz: (14.0, 16.0), height_m: 6.5, kind: Concrete),
+        House(center_xz: (-24.0, -48.0), size_xz: (14.0, 16.0), height_m: 6.5, kind: Concrete),
+        House(center_xz: (24.0, -48.0), size_xz: (14.0, 16.0), height_m: 6.5, kind: Brick),
+        House(center_xz: (-66.0, 44.0), size_xz: (12.0, 18.0), height_m: 6.0, kind: Concrete),
+        House(center_xz: (66.0, 44.0), size_xz: (12.0, 18.0), height_m: 6.0, kind: Brick),
+        House(center_xz: (-66.0, -44.0), size_xz: (12.0, 18.0), height_m: 6.0, kind: Brick),
+        House(center_xz: (66.0, -44.0), size_xz: (12.0, 18.0), height_m: 6.0, kind: Concrete),
+    ],
+    targets: [],
+    ally_spawns: [
+        (pos_xz: (-50.0, 118.0), yaw_deg: 0.0, tank_id: Some("t34_85")),
+        (pos_xz: (-24.0, 120.0), yaw_deg: 0.0, tank_id: Some("su_100")),
+        (pos_xz: (24.0, 120.0), yaw_deg: 0.0, tank_id: Some("is_3")),
+        (pos_xz: (50.0, 118.0), yaw_deg: 0.0, tank_id: Some("m26_pershing")),
+    ],
+    enemy_spawns: [
+        (pos_xz: (-50.0, -118.0), yaw_deg: 180.0, tank_id: Some("pz_4")),
+        (pos_xz: (-24.0, -120.0), yaw_deg: 180.0, tank_id: Some("panther")),
+        (pos_xz: (0.0, -116.0), yaw_deg: 180.0, tank_id: Some("tiger_1")),
+        (pos_xz: (24.0, -120.0), yaw_deg: 180.0, tank_id: Some("tiger_2")),
+        (pos_xz: (50.0, -118.0), yaw_deg: 180.0, tank_id: Some("m4a3e8")),
+    ],
+    waypoints: [
+        (-46.0, 0.0),
+        (46.0, 0.0),
+        (-80.0, 56.0),
+        (80.0, 56.0),
+        (-80.0, -56.0),
+        (80.0, -56.0),
+        (0.0, 58.0),
+        (0.0, -58.0),
+    ],
+)

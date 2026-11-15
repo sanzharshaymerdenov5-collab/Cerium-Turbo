@@ -74,8 +74,10 @@ pub fn generate_map_grid(spec: &MapSpec) -> VoxelGrid {
             let wz = origin.z + (z as f32 + 0.5) * s;
             let h_m = terrain_height_m(spec, wx, wz);
             let top_y = ((h_m / s).round() as i32 - 1).clamp(0, dims.y as i32 - 2);
-            let is_lane =
-                spec.biome == MapBiome::Temperate && wx.abs() < 4.5 && wz > -140.0 && wz < 130.0;
+            let is_lane = spec.id == super::spec::PROVING_GROUNDS_ID
+                && wx.abs() < 4.5
+                && wz > -140.0
+                && wz < 130.0;
             let in_ice = spec
                 .ice_zones
                 .iter()
@@ -87,10 +89,14 @@ pub fn generate_map_grid(spec: &MapSpec) -> VoxelGrid {
             } else {
                 match spec.biome {
                     MapBiome::Temperate => {
+                        let dirt_road = spec.id != super::spec::PROVING_GROUNDS_ID
+                            && (wx - (wz * 0.032).sin() * 14.0).abs() < 3.0;
                         if is_lane {
                             Material::Sand
                         } else if high_rock {
                             Material::Rock
+                        } else if dirt_road {
+                            Material::Soil
                         } else {
                             Material::Grass
                         }
@@ -123,6 +129,16 @@ pub fn generate_map_grid(spec: &MapSpec) -> VoxelGrid {
                             Material::Rock
                         } else {
                             Material::Soil
+                        }
+                    }
+                    MapBiome::Highland => {
+                        let elev = top_y as f32 * s - spec.base_height_m;
+                        if elev > 8.5 {
+                            Material::Snow
+                        } else if elev > 2.2 || (wx.abs() > 62.0 && wx.abs() < 74.0) {
+                            Material::Rock
+                        } else {
+                            Material::Grass
                         }
                     }
                 }
@@ -271,9 +287,9 @@ mod tests {
     }
 
     #[test]
-    fn all_five_maps_have_indestructible_ground_and_destructible_structures() {
+    fn all_maps_have_indestructible_ground_and_destructible_structures() {
         let maps = available_maps();
-        assert_eq!(maps.len(), 5, "должно быть ровно 5 карт на Этапе 5");
+        assert_eq!(maps.len(), 10, "должно быть ровно 10 карт (Полигон + 9 боевых)");
 
         for spec in maps {
             assert_eq!(spec.ally_spawns.len(), 4, "карта {} без 4 союзников", spec.id);
@@ -372,5 +388,40 @@ mod tests {
         let grid = generate_map_grid(&winter);
         let ice_hit = grid.raycast(Vec3::new(0.0, 10.0, 0.0), Vec3::NEG_Y, 15.0).unwrap();
         assert_eq!(ice_hit.material, Material::Ice);
+    }
+
+    #[test]
+    fn new_maps_produce_expected_biomes_and_no_range_lane() {
+        use crate::maps::spec::{ALPINE_PASS_RON, NORDIC_FJORD_RON, PROKHOROVKA_RIDGE_RON};
+
+        // Альпийский перевал: заснеженный пик в центре и зелёная долина на подходах.
+        let alpine = MapSpec::from_ron(ALPINE_PASS_RON).unwrap();
+        let alpine_grid = generate_map_grid(&alpine);
+        let peak_hit = alpine_grid
+            .raycast(Vec3::new(0.0, 27.5, 0.0), Vec3::NEG_Y, 28.0)
+            .unwrap();
+        assert_eq!(peak_hit.material, Material::Snow);
+        let valley_hit = alpine_grid
+            .raycast(Vec3::new(0.0, 10.0, 80.0), Vec3::NEG_Y, 15.0)
+            .unwrap();
+        assert_eq!(valley_hit.material, Material::Grass);
+
+        // Ледяной фьорд: замёрзшее западное русло покрыто льдом.
+        let fjord = MapSpec::from_ron(NORDIC_FJORD_RON).unwrap();
+        let fjord_grid = generate_map_grid(&fjord);
+        let fjord_ice = fjord_grid
+            .raycast(Vec3::new(-66.0, 10.0, 0.0), Vec3::NEG_Y, 15.0)
+            .unwrap();
+        assert_eq!(fjord_ice.material, Material::Ice);
+
+        // Прохоровская дуга: умеренный биом без песчаной стрельбищной полосы Полигона.
+        let prokh = MapSpec::from_ron(PROKHOROVKA_RIDGE_RON).unwrap();
+        let prokh_grid = generate_map_grid(&prokh);
+        for z in [70.0, 90.0, 110.0] {
+            let hit = prokh_grid
+                .raycast(Vec3::new(0.0, 15.0, z), Vec3::NEG_Y, 20.0)
+                .unwrap();
+            assert_ne!(hit.material, Material::Sand);
+        }
     }
 }
