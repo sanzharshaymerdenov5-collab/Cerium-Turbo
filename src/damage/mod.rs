@@ -32,6 +32,7 @@ pub struct TankDestroyedMessage {
     pub pos: Vec3,
     pub team: Team,
     pub ammo_detonated: bool,
+    pub killer: Option<Entity>,
 }
 
 /// Действия с пожаром и ремонтом модулей (для частиц пены/огня и звука).
@@ -128,6 +129,7 @@ fn handle_prototype_impacts(
                 pos: gt.translation(),
                 team: combat.team,
                 ammo_detonated: false,
+                killer: msg.shooter,
             });
             if let Some(assets) = &assets {
                 *seed = seed.wrapping_add(0xD1B5_4A32_D192_ED03);

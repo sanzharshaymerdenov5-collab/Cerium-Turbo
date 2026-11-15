@@ -1,8 +1,9 @@
-//! Ангар в стиле World of Tanks (Обновление 1.2):
+//! Ангар в стиле World of Tanks (Обновление 1.3):
 //! - Промышленный 3D-цех со смотровой ямой, рельсами, кран-балкой, трубами, прожекторами и дымкой;
-//! - Верхняя панель с крупной кнопкой «В БОЙ!», левое меню режимов и карт, правые карточки ТТХ,
-//!   плавающая полоса экипажа и снаряжения и нижняя карусель из 5 исторических танков;
-//! - Свободный 360°-обзор камерой и 3D-рентген брони, модулей и экипажа `[V]`.
+//! - Экономика (серебро/опыт, награды за бой), дерево исследований 3 наций (СССР, Германия, США)
+//!   × V тиров (15 исторических машин AP-Only);
+//! - Фильтры карусели по нациям и технике в ангаре, предпросмотр любой машины в 3D и X-Ray `[V]`,
+//!   переключение режимов `[M]`, выбор случайной карты `+10%` и 5 локаций 5v5.
 
 #![allow(deprecated)]
 
@@ -17,14 +18,26 @@ use crate::audio::{AudioSettings, SoundPreset, UiSoundMessage};
 use crate::ballistics::penetration::{effective_armor_mm, penetration_at};
 use crate::core::{DamageRulesMode, GameState, SelectedMap, SelectedTank, TankId};
 use crate::damage::{CrewRole, ModuleKind, TankCrew, TankModules};
-use crate::maps::{MapBiome, MapSpec, available_maps, load_map_spec};
+use crate::maps::{MapBiome, MapSpec, RANDOM_MAP_ID, available_maps, load_map_spec};
+use crate::progression::{
+    LastBattleReward, PlayerProgression, buy_tank, ensure_starters, is_owned, is_researched,
+    research_tank,
+};
 use crate::tank::armor::{hull_plate_specs, turret_plate_specs};
 use crate::tank::{
-    HangarPreviewTank, TankSpec, available_tanks, load_tank_spec, spawn_preview_tank,
+    HangarPreviewTank, Nation, TankSpec, available_tanks, load_tank_spec, spawn_preview_tank,
 };
 use crate::voxel::{Material, VoxelAssets, VoxelGrid, voxel_model_bundle};
 
-/// Настройки и текущее состояние камеры и предпросмотра в ангаре.
+/// Фильтр карусели техники в нижней части ангара.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HangarFilter {
+    #[default]
+    AllOwned,
+    Nation(Nation),
+}
+
+/// Настройки и текущее состояние камеры, предпросмотра, фильтров и дерева исследований в ангаре.
 #[derive(Resource, Debug)]
 pub struct HangarViewState {
     pub yaw: f32,
@@ -32,10 +45,17 @@ pub struct HangarViewState {
     pub distance: f32,
     pub auto_spin: bool,
     pub xray_armor: bool,
+    pub preview_tank_id: String,
+    pub spawned_preview_id: String,
+    pub filter_tab: HangarFilter,
+    pub show_tech_tree: bool,
+    pub notice: Option<(String, Color)>,
     pub prev_xray_btn: bool,
     pub prev_mode_btn: bool,
     pub prev_spin_btn: bool,
     pub prev_audio_btn: bool,
+    pub prev_pressed_btn: Option<HangarButton>,
+    pub suppress_click_frames: u8,
 }
 
 impl Default for HangarViewState {
@@ -47,10 +67,17 @@ impl Default for HangarViewState {
             distance: 8.6,
             auto_spin: false,
             xray_armor: false,
+            preview_tank_id: String::new(),
+            spawned_preview_id: String::new(),
+            filter_tab: HangarFilter::AllOwned,
+            show_tech_tree: false,
+            notice: None,
             prev_xray_btn: false,
             prev_mode_btn: false,
             prev_spin_btn: false,
             prev_audio_btn: false,
+            prev_pressed_btn: None,
+            suppress_click_frames: 0,
         }
     }
 }
@@ -64,9 +91,20 @@ pub struct HangarXrayRoot;
 #[derive(Component)]
 pub struct HangarCamera;
 
-#[derive(Component, Clone, Copy, PartialEq, Eq)]
+#[derive(Component)]
+pub struct HangarUiRoot;
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HangarButton {
+    Noop,
+    SelectFilter(HangarFilter),
     SelectTank(usize),
+    InspectTank(usize),
+    SelectOwnedAndClose(usize),
+    ResearchTank(usize),
+    BuyTank(usize),
+    ToggleTechTree,
+    SelectRandomMap,
     SelectMap(usize),
     ToggleMode,
     ToggleXray,
@@ -107,86 +145,60 @@ pub struct TankRatings {
     pub mobility: f32,
 }
 
-/// Классификация и декоративные метаданные техники в стиле WoT.
-#[derive(Debug, Clone, Copy)]
+/// Классификация и метаданные техники в стиле WoT (берутся из `TankSpec`).
+#[derive(Debug, Clone)]
 pub struct TankWotMeta {
     pub tier: &'static str,
     pub class_icon: &'static str,
     pub class_short: &'static str,
     pub nation_short: &'static str,
-    pub gun_short: &'static str,
+    pub gun_short: String,
     pub accent: Color,
 }
 
+pub fn tier_roman(tier: u8) -> &'static str {
+    match tier {
+        1 => "I",
+        2 => "II",
+        3 => "III",
+        4 => "IV",
+        5 => "V",
+        _ => "I",
+    }
+}
+
 pub fn tank_wot_meta(spec: &TankSpec) -> TankWotMeta {
-    match spec.id.as_str() {
-        "m24_chaffee" => TankWotMeta {
-            tier: "V",
-            class_icon: "◆",
-            class_short: "ЛТ",
-            nation_short: "США",
-            gun_short: "75мм M6",
-            accent: Color::srgb(0.46, 0.72, 0.34),
-        },
-        "t34_85" => TankWotMeta {
-            tier: "VI",
-            class_icon: "◈",
-            class_short: "СТ",
-            nation_short: "СССР",
-            gun_short: "85мм ЗиС-С-53",
-            accent: Color::srgb(0.84, 0.28, 0.24),
-        },
-        "su_100" => TankWotMeta {
-            tier: "VI",
-            class_icon: "▼",
-            class_short: "ПТ",
-            nation_short: "СССР",
-            gun_short: "100мм Д-10С",
-            accent: Color::srgb(0.84, 0.28, 0.24),
-        },
-        "tiger_1" => TankWotMeta {
-            tier: "VII",
-            class_icon: "■",
-            class_short: "ТТ",
-            nation_short: "ГЕРМ.",
-            gun_short: "88мм KwK 36",
-            accent: Color::srgb(0.76, 0.64, 0.36),
-        },
-        "is_3" => TankWotMeta {
-            tier: "VIII",
-            class_icon: "■",
-            class_short: "ТТ",
-            nation_short: "СССР",
-            gun_short: "122мм Д-25Т",
-            accent: Color::srgb(0.84, 0.28, 0.24),
-        },
-        _ => TankWotMeta {
-            tier: "VI",
-            class_icon: "◈",
-            class_short: "СТ",
-            nation_short: "ТАНК",
-            gun_short: "AP",
-            accent: Color::srgb(0.65, 0.72, 0.80),
-        },
+    let gun_short = if spec.gun_short.is_empty() {
+        format!("{:.0}мм SolidAP", spec.shell.caliber_mm)
+    } else {
+        spec.gun_short.clone()
+    };
+    TankWotMeta {
+        tier: tier_roman(spec.tier),
+        class_icon: spec.tank_class.icon(),
+        class_short: spec.tank_class.ru_short(),
+        nation_short: spec.nation_id.ru_short(),
+        gun_short,
+        accent: spec.nation_id.accent(),
     }
 }
 
 pub fn compute_tank_ratings(spec: &TankSpec) -> TankRatings {
     let pen = penetration_at(&spec.shell, 100.0);
     let dpm_proxy = (spec.shell.arcade_damage / spec.reload_s.max(1.0)) * 2.1;
-    let firepower = ((pen * 0.56 + dpm_proxy * 0.62) / 195.0).clamp(0.28, 0.98);
-    let survivability = (spec.max_hp / 1600.0).clamp(0.28, 0.98);
+    let firepower = ((pen * 0.56 + dpm_proxy * 0.62) / 210.0).clamp(0.14, 0.98);
+    let survivability = (spec.max_hp / 1620.0).clamp(0.16, 0.98);
 
     let eff_vld = effective_armor_mm(
         &spec.shell,
         spec.armor.hull_front_upper_mm,
         spec.armor.vld_slope_deg,
     );
-    let armor = ((eff_vld * 0.55 + spec.armor.turret_front_mm * 0.65) / 260.0).clamp(0.20, 0.98);
+    let armor = ((eff_vld * 0.55 + spec.armor.turret_front_mm * 0.65) / 260.0).clamp(0.12, 0.98);
 
     let hp_per_t = spec.engine_power_kw / (spec.mass_kg / 1000.0).max(1.0);
     let mobility =
-        ((spec.max_speed_kmh / 60.0) * 0.65 + (hp_per_t / 15.0) * 0.35).clamp(0.24, 0.98);
+        ((spec.max_speed_kmh / 60.0) * 0.65 + (hp_per_t / 20.0) * 0.35).clamp(0.18, 0.98);
 
     TankRatings {
         firepower,
@@ -216,23 +228,65 @@ fn biome_accent(biome: MapBiome) -> Color {
     }
 }
 
-fn enemy_lineup_ru(map_spec: &MapSpec) -> String {
-    if map_spec.enemy_spawns.is_empty() {
-        return "Мишени полигона (без ИИ)".to_string();
+fn resolve_tank_name(id: Option<&str>, tanks: &[TankSpec]) -> String {
+    match id {
+        Some(tid) => tanks
+            .iter()
+            .find(|t| t.id == tid)
+            .map(|t| t.name.clone())
+            .unwrap_or_else(|| tid.to_string()),
+        None => "Танк ИИ".to_string(),
     }
-    let names: Vec<String> = map_spec
+}
+
+fn teams_lineup_ru(map_spec: &MapSpec, tanks: &[TankSpec]) -> String {
+    let allies: Vec<String> = map_spec
+        .ally_spawns
+        .iter()
+        .map(|s| resolve_tank_name(s.tank_id.as_deref(), tanks))
+        .collect();
+    let enemies: Vec<String> = map_spec
         .enemy_spawns
         .iter()
-        .map(|s| match s.tank_id.as_deref() {
-            Some("m24_chaffee") => "M24".to_string(),
-            Some("t34_85") => "Т-34-85".to_string(),
-            Some("tiger_1") => "Tiger I".to_string(),
-            Some("su_100") => "СУ-100".to_string(),
-            Some("is_3") => "ИС-3".to_string(),
-            _ => "Танк ИИ".to_string(),
-        })
+        .map(|s| resolve_tank_name(s.tank_id.as_deref(), tanks))
         .collect();
-    format!("Противник ({}): {}", names.len(), names.join(", "))
+    let ally_str = if allies.is_empty() {
+        "Союз (Вы): одиночный выезд".to_string()
+    } else {
+        format!("Союзники ({}): {}", allies.len(), allies.join(", "))
+    };
+    let enemy_str = if enemies.is_empty() {
+        "Противник: мишени полигона".to_string()
+    } else {
+        format!("Противник ({}): {}", enemies.len(), enemies.join(", "))
+    };
+    format!("{ally_str}\n{enemy_str}")
+}
+
+fn map_brief_text(
+    selected_map_id: &str,
+    maps: &[MapSpec],
+    tanks: &[TankSpec],
+) -> (String, String, Color) {
+    if selected_map_id == RANDOM_MAP_ID {
+        return (
+            "Случайная карта  •  5v5 Автовыбор".to_string(),
+            "Перед началом боя 5v5 выбирается случайная локация из 5 расширенных карт.\nБонус случайной карты: +10% серебра и опыта".to_string(),
+            Color::srgb(0.95, 0.76, 0.36),
+        );
+    }
+    let map_spec = maps
+        .iter()
+        .find(|m| m.id == selected_map_id)
+        .cloned()
+        .or_else(|| load_map_spec("proving_grounds"))
+        .or_else(|| maps.first().cloned())
+        .expect("default map");
+    (
+        format!("{}  •  {} (5v5)", map_spec.name, biome_short_ru(map_spec.biome)),
+        format!("{}\n{}", map_spec.description, teams_lineup_ru(&map_spec, tanks)),
+        biome_accent(map_spec.biome),
+    )
 }
 
 fn format_hangar_ttx_compact(spec: &TankSpec) -> String {
@@ -725,121 +779,609 @@ fn spawn_hangar_environment(
     ));
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn setup_hangar(
-    mut commands: Commands,
-    selected_tank: Res<SelectedTank>,
-    selected_map: Res<SelectedMap>,
-    mode: Res<DamageRulesMode>,
-    view: Res<HangarViewState>,
-    audio: Option<Res<AudioSettings>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    assets: Res<VoxelAssets>,
-) {
-    commands.insert_resource(ClearColor(Color::srgb(0.055, 0.072, 0.096)));
-    commands.insert_resource(GlobalAmbientLight {
-        color: Color::srgb(0.58, 0.72, 0.90),
-        brightness: 320.0,
-        ..default()
-    });
-
-    spawn_hangar_environment(&mut commands, &mut meshes, &mut materials, &assets);
-
-    let spec = load_tank_spec(&selected_tank.0.0)
-        .unwrap_or_else(|| load_tank_spec("t34_85").expect("t34_85"));
-    let preview = spawn_preview_tank(&mut commands, &mut meshes, &assets, &spec);
-    if view.xray_armor {
-        commands.entity(preview).insert(Visibility::Hidden);
+fn owned_combat_spec(selected_tank: &SelectedTank, prog: &PlayerProgression) -> TankSpec {
+    if is_owned(prog, &selected_tank.0.0)
+        && let Some(spec) = load_tank_spec(&selected_tank.0.0)
+    {
+        return spec;
     }
-    let xray_root = spawn_xray_overlay(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        &spec,
-        view.xray_armor,
-    );
+    load_tank_spec("ms_1")
+        .or_else(|| available_tanks().into_iter().next())
+        .expect("at least one tank spec")
+}
 
-    // Стенд вращает саму машину над ямой при включённом автоповороте.
-    commands
+fn filtered_carousel_indices(
+    all_tanks: &[TankSpec],
+    prog: &PlayerProgression,
+    filter: HangarFilter,
+) -> Vec<usize> {
+    all_tanks
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| match filter {
+            HangarFilter::AllOwned => is_owned(prog, &t.id),
+            HangarFilter::Nation(n) => t.nation_id == n,
+        })
+        .map(|(idx, _)| idx)
+        .collect()
+}
+
+fn filter_tab_button(
+    parent: &mut ChildSpawnerCommands,
+    filter: HangarFilter,
+    label: String,
+    active: bool,
+    accent: Color,
+) {
+    parent
         .spawn((
-            Name::new("HangarTurntable"),
-            HangarTurntable,
-            Transform::IDENTITY,
-            Visibility::default(),
-            DespawnOnExit(GameState::Hangar),
-        ))
-        .add_children(&[preview, xray_root]);
-
-    let cam_pos = hangar_camera_pos(&view);
-    commands.spawn((
-        HangarCamera,
-        Camera3d::default(),
-        DistanceFog {
-            color: Color::srgba(0.065, 0.088, 0.116, 0.96),
-            directional_light_color: Color::NONE,
-            directional_light_exponent: 8.0,
-            falloff: FogFalloff::Linear {
-                start: 10.5,
-                end: 42.0,
+            Interaction::default(),
+            HangarButton::SelectFilter(filter),
+            Node {
+                padding: UiRect::axes(Val::Px(11.0), Val::Px(4.0)),
+                border: UiRect::all(Val::Px(if active { 1.5 } else { 1.0 })),
+                border_radius: BorderRadius::all(Val::Px(3.0)),
+                ..default()
             },
+            BackgroundColor(if active {
+                Color::srgba(0.18, 0.25, 0.34, 0.95)
+            } else {
+                Color::srgba(0.05, 0.07, 0.10, 0.85)
+            }),
+            BorderColor::all(if active {
+                accent
+            } else {
+                Color::srgba(0.28, 0.34, 0.42, 0.75)
+            }),
+        ))
+        .with_children(|b| {
+            b.spawn((
+                Text::new(label),
+                TextFont::from_font_size(11.5),
+                TextColor(if active {
+                    Color::srgb(0.98, 0.96, 0.88)
+                } else {
+                    Color::srgb(0.74, 0.80, 0.88)
+                }),
+            ));
+        });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_tech_tree_modal(
+    root: &mut ChildSpawnerCommands,
+    all_tanks: &[TankSpec],
+    prog: &PlayerProgression,
+    selected_tank: &SelectedTank,
+    view: &HangarViewState,
+) {
+    root.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            top: Val::Px(0.0),
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
         },
-        Transform::from_translation(cam_pos).looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
-        DespawnOnExit(GameState::Hangar),
-    ));
+    ))
+    .with_children(|overlay| {
+        // Задний слой-блокиратор: перехватывает клики/наведение, чтобы камера под окном не вращалась.
+        overlay.spawn((
+            Interaction::default(),
+            HangarButton::Noop,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                top: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.01, 0.015, 0.025, 0.78)),
+        ));
 
-    let tanks = available_tanks();
-    let maps = available_maps();
-    let map_spec = load_map_spec(&selected_map.0)
-        .or_else(|| maps.first().cloned())
-        .expect("default map");
-    let meta = tank_wot_meta(&spec);
-    let ratings = compute_tank_ratings(&spec);
-    let muted = audio.as_ref().is_some_and(|a| a.muted);
-    let wt_mode = *mode == DamageRulesMode::ModulesOnlyWt;
+        // Основное окно дерева исследований.
+        overlay
+            .spawn((
+                Node {
+                    width: Val::Percent(94.0),
+                    max_width: Val::Px(1220.0),
+                    padding: UiRect::all(Val::Px(12.0)),
+                    border: UiRect::all(Val::Px(1.5)),
+                    border_radius: BorderRadius::all(Val::Px(6.0)),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(8.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.032, 0.046, 0.068, 0.97)),
+                BorderColor::all(Color::srgb(0.84, 0.62, 0.24)),
+            ))
+            .with_children(|modal| {
+                // Шапка дерева исследований.
+                modal
+                    .spawn((
+                        Node {
+                            width: Val::Percent(100.0),
+                            justify_content: JustifyContent::SpaceBetween,
+                            align_items: AlignItems::Center,
+                            padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                            border: UiRect::bottom(Val::Px(1.0)),
+                            column_gap: Val::Px(10.0),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(0.05, 0.075, 0.11, 0.95)),
+                        BorderColor::all(Color::srgba(0.32, 0.40, 0.50, 0.8)),
+                    ))
+                    .with_children(|mh| {
+                        mh.spawn((
+                            Text::new("ДЕРЕВО ИССЛЕДОВАНИЙ (3 НАЦИИ × V ТИРОВ • SOLID-AP)"),
+                            TextFont::from_font_size(14.0),
+                            TextColor(Color::srgb(0.96, 0.86, 0.56)),
+                        ));
 
-    // ─── Корневой интерфейс WoT-ангара ───
+                        mh.spawn(Node {
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(12.0),
+                            ..default()
+                        })
+                        .with_children(|mid| {
+                            mid.spawn((
+                                Text::new(format!("Серебро: {}", prog.credits)),
+                                TextFont::from_font_size(13.0),
+                                TextColor(Color::srgb(0.94, 0.86, 0.52)),
+                            ));
+                            mid.spawn((
+                                Text::new(format!("Опыт: {}", prog.xp)),
+                                TextFont::from_font_size(13.0),
+                                TextColor(Color::srgb(0.56, 0.86, 1.0)),
+                            ));
+                            if let Some((ref msg, col)) = view.notice {
+                                mid.spawn((
+                                    Text::new(msg.clone()),
+                                    TextFont::from_font_size(11.5),
+                                    TextColor(col),
+                                ));
+                            }
+                        });
+
+                        mh.spawn((
+                            Interaction::default(),
+                            HangarButton::ToggleTechTree,
+                            Node {
+                                padding: UiRect::axes(Val::Px(12.0), Val::Px(5.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                border_radius: BorderRadius::all(Val::Px(3.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.28, 0.12, 0.12)),
+                            BorderColor::all(Color::srgb(0.88, 0.42, 0.36)),
+                        ))
+                        .with_children(|b| {
+                            b.spawn((
+                                Text::new("Закрыть [T / Esc]"),
+                                TextFont::from_font_size(12.0),
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                    });
+
+                // 3 колонки наций (СССР, Германия, США).
+                modal
+                    .spawn(Node {
+                        width: Val::Percent(100.0),
+                        column_gap: Val::Px(10.0),
+                        align_items: AlignItems::Stretch,
+                        ..default()
+                    })
+                    .with_children(|cols| {
+                        for nation in Nation::all() {
+                            let accent = nation.accent();
+                            cols.spawn((
+                                Node {
+                                    flex_grow: 1.0,
+                                    flex_basis: Val::Px(0.0),
+                                    flex_direction: FlexDirection::Column,
+                                    padding: UiRect::all(Val::Px(8.0)),
+                                    border: UiRect {
+                                        top: Val::Px(3.0),
+                                        left: Val::Px(1.0),
+                                        right: Val::Px(1.0),
+                                        bottom: Val::Px(1.0),
+                                    },
+                                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                                    row_gap: Val::Px(3.0),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgba(0.04, 0.056, 0.08, 0.92)),
+                                BorderColor::all(accent),
+                            ))
+                            .with_children(|col| {
+                                col.spawn((
+                                    Text::new(format!("{}  (I -> V)", nation.ru_name())),
+                                    TextFont::from_font_size(13.0),
+                                    TextColor(Color::srgb(0.95, 0.96, 0.98)),
+                                ));
+
+                                let mut branch: Vec<(usize, &TankSpec)> = all_tanks
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, t)| t.nation_id == nation)
+                                    .collect();
+                                branch.sort_by_key(|(_, t)| t.tier);
+
+                                for (pos, &(g_idx, t)) in branch.iter().enumerate() {
+                                    if pos > 0 {
+                                        col.spawn((
+                                            Node {
+                                                align_self: AlignSelf::Center,
+                                                ..default()
+                                            },
+                                            Text::new("↓"),
+                                            TextFont::from_font_size(11.0),
+                                            TextColor(Color::srgb(0.55, 0.65, 0.78)),
+                                        ));
+                                    }
+
+                                    let owned = is_owned(prog, &t.id);
+                                    let researched = is_researched(prog, &t.id);
+                                    let is_combat = t.id == selected_tank.0.0;
+                                    let is_preview = t.id == view.preview_tank_id;
+                                    let prereq_met = t
+                                        .prerequisite
+                                        .as_deref()
+                                        .is_none_or(|p| is_researched(prog, p));
+                                    let tm = tank_wot_meta(t);
+                                    let pen = penetration_at(&t.shell, 100.0);
+
+                                    let (badge, badge_col, card_bg, card_border) = if owned {
+                                        (
+                                            if is_combat { "В БОЮ" } else { "В АНГАРЕ" },
+                                            Color::srgb(0.45, 0.94, 0.54),
+                                            Color::srgba(0.09, 0.18, 0.12, 0.94),
+                                            if is_combat {
+                                                Color::srgb(0.96, 0.68, 0.22)
+                                            } else {
+                                                Color::srgb(0.32, 0.74, 0.42)
+                                            },
+                                        )
+                                    } else if researched {
+                                        (
+                                            "ОТКРЫТ",
+                                            Color::srgb(0.98, 0.82, 0.36),
+                                            Color::srgba(0.16, 0.14, 0.08, 0.94),
+                                            Color::srgb(0.86, 0.68, 0.28),
+                                        )
+                                    } else if prereq_met {
+                                        (
+                                            "ДОСТУПЕН",
+                                            Color::srgb(0.54, 0.86, 1.0),
+                                            Color::srgba(0.08, 0.13, 0.20, 0.94),
+                                            Color::srgb(0.36, 0.64, 0.92),
+                                        )
+                                    } else {
+                                        (
+                                            "ЗАКРЫТ",
+                                            Color::srgb(0.56, 0.62, 0.70),
+                                            Color::srgba(0.05, 0.06, 0.08, 0.88),
+                                            Color::srgba(0.24, 0.28, 0.34, 0.8),
+                                        )
+                                    };
+
+                                    col.spawn((
+                                        Node {
+                                            flex_direction: FlexDirection::Column,
+                                            padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
+                                            border: UiRect::all(Val::Px(if is_preview {
+                                                2.0
+                                            } else {
+                                                1.0
+                                            })),
+                                            border_radius: BorderRadius::all(Val::Px(4.0)),
+                                            row_gap: Val::Px(3.0),
+                                            ..default()
+                                        },
+                                        BackgroundColor(card_bg),
+                                        BorderColor::all(card_border),
+                                    ))
+                                    .with_children(|card| {
+                                        card.spawn(Node {
+                                            width: Val::Percent(100.0),
+                                            justify_content: JustifyContent::SpaceBetween,
+                                            align_items: AlignItems::Center,
+                                            ..default()
+                                        })
+                                        .with_children(|r1| {
+                                            r1.spawn((
+                                                Text::new(format!(
+                                                    "{} {} {}  {}",
+                                                    tm.tier, tm.class_icon, tm.class_short, t.name
+                                                )),
+                                                TextFont::from_font_size(12.0),
+                                                TextColor(if owned || researched || prereq_met {
+                                                    Color::srgb(0.96, 0.97, 0.99)
+                                                } else {
+                                                    Color::srgb(0.62, 0.67, 0.74)
+                                                }),
+                                            ));
+                                            r1.spawn((
+                                                Text::new(badge),
+                                                TextFont::from_font_size(10.0),
+                                                TextColor(badge_col),
+                                            ));
+                                        });
+
+                                        card.spawn((
+                                            Text::new(format!(
+                                                "{} • Проб. {:.0}мм • {:.0} HP",
+                                                tm.gun_short, pen, t.max_hp
+                                            )),
+                                            TextFont::from_font_size(10.5),
+                                            TextColor(Color::srgb(0.72, 0.80, 0.88)),
+                                        ));
+
+                                        // Строка действий (строго соседние кнопки без вложенных Interaction!).
+                                        card.spawn(Node {
+                                            width: Val::Percent(100.0),
+                                            justify_content: JustifyContent::SpaceBetween,
+                                            align_items: AlignItems::Center,
+                                            column_gap: Val::Px(6.0),
+                                            ..default()
+                                        })
+                                        .with_children(|actions| {
+                                            actions
+                                                .spawn((
+                                                    Interaction::default(),
+                                                    HangarButton::InspectTank(g_idx),
+                                                    Node {
+                                                        padding: UiRect::axes(
+                                                            Val::Px(7.0),
+                                                            Val::Px(3.0),
+                                                        ),
+                                                        border: UiRect::all(Val::Px(1.0)),
+                                                        border_radius: BorderRadius::all(
+                                                            Val::Px(3.0),
+                                                        ),
+                                                        ..default()
+                                                    },
+                                                    BackgroundColor(Color::srgba(
+                                                        0.10, 0.15, 0.22, 0.92,
+                                                    )),
+                                                    BorderColor::all(Color::srgb(
+                                                        0.38, 0.52, 0.68,
+                                                    )),
+                                                ))
+                                                .with_children(|b| {
+                                                    b.spawn((
+                                                        Text::new("Осмотр 3D"),
+                                                        TextFont::from_font_size(10.5),
+                                                        TextColor(Color::srgb(0.86, 0.92, 0.98)),
+                                                    ));
+                                                });
+
+                                            if owned {
+                                                actions
+                                                    .spawn((
+                                                        Interaction::default(),
+                                                        HangarButton::SelectOwnedAndClose(g_idx),
+                                                        Node {
+                                                            padding: UiRect::axes(
+                                                                Val::Px(8.0),
+                                                                Val::Px(3.0),
+                                                            ),
+                                                            border: UiRect::all(Val::Px(1.0)),
+                                                            border_radius: BorderRadius::all(
+                                                                Val::Px(3.0),
+                                                            ),
+                                                            ..default()
+                                                        },
+                                                        BackgroundColor(if is_combat {
+                                                            Color::srgb(0.18, 0.36, 0.20)
+                                                        } else {
+                                                            Color::srgb(0.14, 0.26, 0.16)
+                                                        }),
+                                                        BorderColor::all(Color::srgb(
+                                                            0.44, 0.86, 0.48,
+                                                        )),
+                                                    ))
+                                                    .with_children(|b| {
+                                                        b.spawn((
+                                                            Text::new(if is_combat {
+                                                                "Выбран в бой"
+                                                            } else {
+                                                                "Выбрать в бой"
+                                                            }),
+                                                            TextFont::from_font_size(10.5),
+                                                            TextColor(Color::srgb(
+                                                                0.90, 0.98, 0.90,
+                                                            )),
+                                                        ));
+                                                    });
+                                            } else if researched {
+                                                let can_afford =
+                                                    prog.credits >= t.credit_cost as u64;
+                                                actions
+                                                    .spawn((
+                                                        Interaction::default(),
+                                                        HangarButton::BuyTank(g_idx),
+                                                        Node {
+                                                            padding: UiRect::axes(
+                                                                Val::Px(8.0),
+                                                                Val::Px(3.0),
+                                                            ),
+                                                            border: UiRect::all(Val::Px(1.0)),
+                                                            border_radius: BorderRadius::all(
+                                                                Val::Px(3.0),
+                                                            ),
+                                                            ..default()
+                                                        },
+                                                        BackgroundColor(if can_afford {
+                                                            Color::srgb(0.46, 0.28, 0.08)
+                                                        } else {
+                                                            Color::srgba(0.24, 0.12, 0.10, 0.92)
+                                                        }),
+                                                        BorderColor::all(if can_afford {
+                                                            Color::srgb(0.96, 0.72, 0.24)
+                                                        } else {
+                                                            Color::srgb(0.62, 0.34, 0.28)
+                                                        }),
+                                                    ))
+                                                    .with_children(|b| {
+                                                        b.spawn((
+                                                            Text::new(format!(
+                                                                "Купить: {} сер.",
+                                                                t.credit_cost
+                                                            )),
+                                                            TextFont::from_font_size(10.5),
+                                                            TextColor(Color::srgb(
+                                                                1.0, 0.92, 0.72,
+                                                            )),
+                                                        ));
+                                                    });
+                                            } else if prereq_met {
+                                                let can_xp = prog.xp >= t.xp_cost as u64;
+                                                actions
+                                                    .spawn((
+                                                        Interaction::default(),
+                                                        HangarButton::ResearchTank(g_idx),
+                                                        Node {
+                                                            padding: UiRect::axes(
+                                                                Val::Px(8.0),
+                                                                Val::Px(3.0),
+                                                            ),
+                                                            border: UiRect::all(Val::Px(1.0)),
+                                                            border_radius: BorderRadius::all(
+                                                                Val::Px(3.0),
+                                                            ),
+                                                            ..default()
+                                                        },
+                                                        BackgroundColor(if can_xp {
+                                                            Color::srgb(0.12, 0.28, 0.44)
+                                                        } else {
+                                                            Color::srgba(0.16, 0.12, 0.18, 0.90)
+                                                        }),
+                                                        BorderColor::all(if can_xp {
+                                                            Color::srgb(0.44, 0.80, 1.0)
+                                                        } else {
+                                                            Color::srgb(0.46, 0.42, 0.56)
+                                                        }),
+                                                    ))
+                                                    .with_children(|b| {
+                                                        b.spawn((
+                                                            Text::new(format!(
+                                                                "Исследовать: {} оп.",
+                                                                t.xp_cost
+                                                            )),
+                                                            TextFont::from_font_size(10.5),
+                                                            TextColor(Color::srgb(
+                                                                0.86, 0.96, 1.0,
+                                                            )),
+                                                        ));
+                                                    });
+                                            } else {
+                                                let prereq_name = t
+                                                    .prerequisite
+                                                    .as_deref()
+                                                    .and_then(|pid| {
+                                                        all_tanks.iter().find(|x| x.id == pid)
+                                                    })
+                                                    .map_or("предыдущий", |x| x.name.as_str());
+                                                actions.spawn((
+                                                    Text::new(format!(
+                                                        "Нужен {prereq_name} ({} оп.)",
+                                                        t.xp_cost
+                                                    )),
+                                                    TextFont::from_font_size(10.0),
+                                                    TextColor(Color::srgb(0.56, 0.60, 0.68)),
+                                                ));
+                                            }
+                                        });
+                                    });
+                                }
+                            });
+                        }
+                    });
+            });
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_hangar_ui(
+    commands: &mut Commands,
+    all_tanks: &[TankSpec],
+    maps: &[MapSpec],
+    selected_tank: &SelectedTank,
+    selected_map: &SelectedMap,
+    mode: DamageRulesMode,
+    view: &HangarViewState,
+    prog: &PlayerProgression,
+    last_reward: &LastBattleReward,
+    preview_spec: &TankSpec,
+    muted: bool,
+) {
+    let combat_spec = owned_combat_spec(selected_tank, prog);
+    let (brief_title, brief_body, brief_accent) =
+        map_brief_text(&selected_map.0, maps, all_tanks);
+    let meta = tank_wot_meta(preview_spec);
+    let ratings = compute_tank_ratings(preview_spec);
+    let wt_mode = mode == DamageRulesMode::ModulesOnlyWt;
+    let visible_indices = filtered_carousel_indices(all_tanks, prog, view.filter_tab);
+    let preview_global_idx = all_tanks
+        .iter()
+        .position(|t| t.id == preview_spec.id)
+        .unwrap_or(0);
+    let preview_owned = is_owned(prog, &preview_spec.id);
+    let preview_researched = is_researched(prog, &preview_spec.id);
+    let preview_prereq_met = preview_spec
+        .prerequisite
+        .as_deref()
+        .is_none_or(|p| is_researched(prog, p));
+    let owned_count = all_tanks.iter().filter(|t| is_owned(prog, &t.id)).count();
+
     commands
         .spawn((
+            HangarUiRoot,
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::SpaceBetween,
-                padding: UiRect::all(Val::Px(12.0)),
-                row_gap: Val::Px(6.0),
+                padding: UiRect::all(Val::Px(10.0)),
+                row_gap: Val::Px(5.0),
                 ..default()
             },
             DespawnOnExit(GameState::Hangar),
         ))
         .with_children(|root| {
-            // 1. ВЕРХНЯЯ ПАНЕЛЬ + КРУПНАЯ КНОПКА «В БОЙ!» + ТИТУЛ МАШИНЫ
+            // 1. ВЕРХНЯЯ ПАНЕЛЬ + КРУПНАЯ КНОПКА «В БОЙ!» + ТИТУЛ МАШИНЫ + ПРОГРЕСС
             root.spawn(Node {
                 width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                row_gap: Val::Px(6.0),
+                row_gap: Val::Px(5.0),
                 ..default()
             })
             .with_children(|header| {
-                // Тёмная верхняя строка навигации WoT.
+                // Тёмная верхняя строка навигации WoT с экономикой и кнопкой дерева.
                 header
                     .spawn((
                         Node {
                             width: Val::Percent(100.0),
                             justify_content: JustifyContent::SpaceBetween,
                             align_items: AlignItems::Center,
-                            padding: UiRect::axes(Val::Px(14.0), Val::Px(6.0)),
+                            padding: UiRect::axes(Val::Px(12.0), Val::Px(5.0)),
                             border: UiRect::bottom(Val::Px(1.0)),
                             border_radius: BorderRadius::all(Val::Px(4.0)),
-                            column_gap: Val::Px(10.0),
+                            column_gap: Val::Px(8.0),
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(0.04, 0.055, 0.072, 0.90)),
-                        BorderColor::all(Color::srgba(0.32, 0.38, 0.46, 0.7)),
+                        BackgroundColor(Color::srgba(0.04, 0.055, 0.072, 0.92)),
+                        BorderColor::all(Color::srgba(0.32, 0.38, 0.46, 0.72)),
                     ))
                     .with_children(|bar| {
-                        // Лево: бренд + бейдж «Обновление 1.2» + быстрый режим.
+                        // Лево: бренд, версия, режим и баланс серебра/опыта.
                         bar.spawn(Node {
                             align_items: AlignItems::Center,
                             column_gap: Val::Px(8.0),
@@ -848,32 +1390,52 @@ pub fn setup_hangar(
                         .with_children(|left| {
                             left.spawn((
                                 Text::new("CERIUM-TURBO"),
-                                TextFont::from_font_size(16.0),
+                                TextFont::from_font_size(15.0),
                                 TextColor(Color::srgb(0.95, 0.96, 0.98)),
                             ));
                             left.spawn((
                                 Node {
-                                    padding: UiRect::axes(Val::Px(7.0), Val::Px(2.0)),
+                                    padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
                                     border: UiRect::all(Val::Px(1.0)),
                                     border_radius: BorderRadius::all(Val::Px(3.0)),
                                     ..default()
                                 },
-                                BackgroundColor(Color::srgba(0.68, 0.30, 0.08, 0.90)),
+                                BackgroundColor(Color::srgba(0.68, 0.30, 0.08, 0.92)),
                                 BorderColor::all(Color::srgb(0.96, 0.56, 0.22)),
                             ))
                             .with_children(|b| {
                                 b.spawn((
-                                    Text::new("v1.2"),
-                                    TextFont::from_font_size(12.0),
+                                    Text::new("v1.3"),
+                                    TextFont::from_font_size(11.5),
                                     TextColor(Color::srgb(1.0, 0.92, 0.78)),
                                 ));
                             });
                             left.spawn((
                                 HangarLabel::HeaderStatus,
-                                Text::new(format!("• Режим: {}", mode.ru_label())),
-                                TextFont::from_font_size(12.0),
+                                Text::new(format!("• {}", mode.ru_label())),
+                                TextFont::from_font_size(11.5),
                                 TextColor(Color::srgb(0.72, 0.80, 0.88)),
                             ));
+                            left.spawn((
+                                Node {
+                                    padding: UiRect::axes(Val::Px(8.0), Val::Px(2.0)),
+                                    border: UiRect::all(Val::Px(1.0)),
+                                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgba(0.08, 0.11, 0.16, 0.92)),
+                                BorderColor::all(Color::srgba(0.45, 0.52, 0.62, 0.65)),
+                            ))
+                            .with_children(|econ| {
+                                econ.spawn((
+                                    Text::new(format!(
+                                        "Серебро: {}  |  Опыт: {}",
+                                        prog.credits, prog.xp
+                                    )),
+                                    TextFont::from_font_size(12.0),
+                                    TextColor(Color::srgb(0.96, 0.86, 0.50)),
+                                ));
+                            });
                         });
 
                         // Центр: фирменная оранжево-красная кнопка «В БОЙ!».
@@ -881,7 +1443,7 @@ pub fn setup_hangar(
                             Interaction::default(),
                             HangarButton::StartBattle,
                             Node {
-                                padding: UiRect::axes(Val::Px(34.0), Val::Px(8.0)),
+                                padding: UiRect::axes(Val::Px(24.0), Val::Px(7.0)),
                                 border: UiRect::all(Val::Px(2.0)),
                                 border_radius: BorderRadius::all(Val::Px(4.0)),
                                 ..default()
@@ -891,30 +1453,60 @@ pub fn setup_hangar(
                         ))
                         .with_children(|btn| {
                             btn.spawn((
-                                Text::new("В БОЙ!"),
-                                TextFont::from_font_size(18.5),
+                                Text::new(format!("В БОЙ! ({})", combat_spec.name)),
+                                TextFont::from_font_size(15.5),
                                 TextColor(Color::WHITE),
                             ));
                         });
 
-                        // Право: сводка и кнопка звука `[N]`.
+                        // Право: кнопка дерева исследований [T], краткая сводка и кнопка звука [N].
                         bar.spawn(Node {
                             align_items: AlignItems::Center,
                             column_gap: Val::Px(8.0),
                             ..default()
                         })
                         .with_children(|right| {
+                            right
+                                .spawn((
+                                    Interaction::default(),
+                                    HangarButton::ToggleTechTree,
+                                    Node {
+                                        padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
+                                        border: UiRect::all(Val::Px(1.5)),
+                                        border_radius: BorderRadius::all(Val::Px(3.0)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(if view.show_tech_tree {
+                                        Color::srgb(0.32, 0.24, 0.08)
+                                    } else {
+                                        Color::srgb(0.12, 0.20, 0.30)
+                                    }),
+                                    BorderColor::all(if view.show_tech_tree {
+                                        Color::srgb(0.96, 0.74, 0.26)
+                                    } else {
+                                        Color::srgb(0.45, 0.70, 0.95)
+                                    }),
+                                ))
+                                .with_children(|b| {
+                                    b.spawn((
+                                        Text::new("[T] Дерево"),
+                                        TextFont::from_font_size(12.0),
+                                        TextColor(Color::srgb(0.94, 0.96, 1.0)),
+                                    ));
+                                });
+
                             right.spawn((
-                                Text::new("5 машин • 5 карт • AP-Only"),
-                                TextFont::from_font_size(11.5),
+                                Text::new("5v5 • 15 машин • AP-Only"),
+                                TextFont::from_font_size(11.0),
                                 TextColor(Color::srgb(0.68, 0.75, 0.82)),
                             ));
+
                             right
                                 .spawn((
                                     Interaction::default(),
                                     HangarButton::ToggleAudio,
                                     Node {
-                                        padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
+                                        padding: UiRect::axes(Val::Px(9.0), Val::Px(5.0)),
                                         border: UiRect::all(Val::Px(1.0)),
                                         border_radius: BorderRadius::all(Val::Px(3.0)),
                                         ..default()
@@ -938,47 +1530,240 @@ pub fn setup_hangar(
                                         } else {
                                             "Звук [N]: ВКЛ"
                                         }),
-                                        TextFont::from_font_size(12.0),
+                                        TextFont::from_font_size(11.5),
                                         TextColor(Color::srgb(0.90, 0.96, 0.94)),
                                     ));
                                 });
                         });
                     });
 
-                // Центрированный заголовок выбранного танка прямо под кнопкой «В БОЙ!».
+                // Центрированный заголовок осматриваемой машины + кнопка исследования/покупки при осмотре заблокированной.
                 header
                     .spawn((
                         Node {
-                            flex_direction: FlexDirection::Column,
                             align_items: AlignItems::Center,
-                            padding: UiRect::axes(Val::Px(22.0), Val::Px(4.0)),
+                            column_gap: Val::Px(12.0),
+                            padding: UiRect::axes(Val::Px(18.0), Val::Px(4.0)),
                             border_radius: BorderRadius::all(Val::Px(4.0)),
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(0.03, 0.045, 0.06, 0.56)),
+                        BackgroundColor(Color::srgba(0.03, 0.045, 0.06, 0.62)),
                     ))
                     .with_children(|hero| {
-                        hero.spawn((
-                            HangarLabel::HeroTitle,
-                            Text::new(format!(
-                                "{} {} {}   {}   •   {}",
-                                meta.tier, meta.class_icon, meta.class_short, spec.name, meta.nation_short
-                            )),
-                            TextFont::from_font_size(19.0),
-                            TextColor(Color::srgb(0.96, 0.97, 0.98)),
-                        ));
-                        hero.spawn((
-                            HangarLabel::HeroSubtitle,
-                            Text::new(format!(
-                                "{} • SolidAP {:.0} мм • {:.0} HP",
-                                meta.gun_short,
-                                penetration_at(&spec.shell, 100.0),
-                                spec.max_hp
-                            )),
-                            TextFont::from_font_size(12.0),
-                            TextColor(Color::srgb(0.76, 0.82, 0.88)),
-                        ));
+                        hero.spawn(Node {
+                            flex_direction: FlexDirection::Column,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        })
+                        .with_children(|titles| {
+                            titles.spawn((
+                                HangarLabel::HeroTitle,
+                                Text::new(format!(
+                                    "{} {} {}   {}   •   {}",
+                                    meta.tier,
+                                    meta.class_icon,
+                                    meta.class_short,
+                                    preview_spec.name,
+                                    meta.nation_short
+                                )),
+                                TextFont::from_font_size(18.0),
+                                TextColor(Color::srgb(0.96, 0.97, 0.98)),
+                            ));
+                            titles.spawn((
+                                HangarLabel::HeroSubtitle,
+                                Text::new(format!(
+                                    "{} • SolidAP {:.0} мм • {:.0} HP",
+                                    meta.gun_short,
+                                    penetration_at(&preview_spec.shell, 100.0),
+                                    preview_spec.max_hp
+                                )),
+                                TextFont::from_font_size(11.5),
+                                TextColor(Color::srgb(0.76, 0.82, 0.88)),
+                            ));
+                        });
+
+                        if preview_owned {
+                            let is_active = preview_spec.id == combat_spec.id;
+                            if is_active {
+                                hero.spawn((
+                                    Node {
+                                        padding: UiRect::axes(Val::Px(9.0), Val::Px(4.0)),
+                                        border: UiRect::all(Val::Px(1.0)),
+                                        border_radius: BorderRadius::all(Val::Px(3.0)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgba(0.10, 0.24, 0.14, 0.90)),
+                                    BorderColor::all(Color::srgb(0.36, 0.80, 0.44)),
+                                ))
+                                .with_children(|b| {
+                                    b.spawn((
+                                        Text::new("В АНГАРЕ • ГОТОВ К БОЮ"),
+                                        TextFont::from_font_size(11.0),
+                                        TextColor(Color::srgb(0.76, 0.98, 0.80)),
+                                    ));
+                                });
+                            } else {
+                                hero.spawn((
+                                    Interaction::default(),
+                                    HangarButton::SelectTank(preview_global_idx),
+                                    Node {
+                                        padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
+                                        border: UiRect::all(Val::Px(1.0)),
+                                        border_radius: BorderRadius::all(Val::Px(3.0)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgb(0.14, 0.30, 0.16)),
+                                    BorderColor::all(Color::srgb(0.45, 0.88, 0.48)),
+                                ))
+                                .with_children(|b| {
+                                    b.spawn((
+                                        Text::new("Выбрать в бой"),
+                                        TextFont::from_font_size(11.5),
+                                        TextColor(Color::WHITE),
+                                    ));
+                                });
+                            }
+                        } else if preview_researched {
+                            let can_afford = prog.credits >= preview_spec.credit_cost as u64;
+                            hero.spawn((
+                                Interaction::default(),
+                                HangarButton::BuyTank(preview_global_idx),
+                                Node {
+                                    padding: UiRect::axes(Val::Px(11.0), Val::Px(4.0)),
+                                    border: UiRect::all(Val::Px(1.5)),
+                                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(if can_afford {
+                                    Color::srgb(0.46, 0.28, 0.08)
+                                } else {
+                                    Color::srgba(0.24, 0.12, 0.10, 0.92)
+                                }),
+                                BorderColor::all(if can_afford {
+                                    Color::srgb(0.96, 0.72, 0.24)
+                                } else {
+                                    Color::srgb(0.65, 0.36, 0.28)
+                                }),
+                            ))
+                            .with_children(|b| {
+                                b.spawn((
+                                    Text::new(format!("Купить: {} сер.", preview_spec.credit_cost)),
+                                    TextFont::from_font_size(11.5),
+                                    TextColor(Color::srgb(1.0, 0.92, 0.72)),
+                                ));
+                            });
+                        } else if preview_prereq_met {
+                            let can_xp = prog.xp >= preview_spec.xp_cost as u64;
+                            hero.spawn((
+                                Interaction::default(),
+                                HangarButton::ResearchTank(preview_global_idx),
+                                Node {
+                                    padding: UiRect::axes(Val::Px(11.0), Val::Px(4.0)),
+                                    border: UiRect::all(Val::Px(1.5)),
+                                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(if can_xp {
+                                    Color::srgb(0.12, 0.28, 0.44)
+                                } else {
+                                    Color::srgba(0.15, 0.12, 0.18, 0.90)
+                                }),
+                                BorderColor::all(if can_xp {
+                                    Color::srgb(0.44, 0.80, 1.0)
+                                } else {
+                                    Color::srgb(0.46, 0.42, 0.56)
+                                }),
+                            ))
+                            .with_children(|b| {
+                                b.spawn((
+                                    Text::new(format!("Исследовать: {} оп.", preview_spec.xp_cost)),
+                                    TextFont::from_font_size(11.5),
+                                    TextColor(Color::srgb(0.86, 0.96, 1.0)),
+                                ));
+                            });
+                        } else {
+                            let prereq_name = preview_spec
+                                .prerequisite
+                                .as_deref()
+                                .and_then(|pid| all_tanks.iter().find(|x| x.id == pid))
+                                .map_or("предыдущий", |x| x.name.as_str());
+                            hero.spawn((
+                                Node {
+                                    padding: UiRect::axes(Val::Px(9.0), Val::Px(4.0)),
+                                    border: UiRect::all(Val::Px(1.0)),
+                                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgba(0.10, 0.09, 0.12, 0.86)),
+                                BorderColor::all(Color::srgba(0.40, 0.36, 0.48, 0.8)),
+                            ))
+                            .with_children(|b| {
+                                b.spawn((
+                                    Text::new(format!(
+                                        "Осмотр (нужен {prereq_name} • {} оп.)",
+                                        preview_spec.xp_cost
+                                    )),
+                                    TextFont::from_font_size(11.0),
+                                    TextColor(Color::srgb(0.76, 0.78, 0.86)),
+                                ));
+                            });
+                        }
                     });
+
+                // Полоса итогов прошлого боя или системного уведомления о покупке/исследовании.
+                if view.notice.is_some() || last_reward.active {
+                    header
+                        .spawn((
+                            Node {
+                                padding: UiRect::axes(Val::Px(14.0), Val::Px(3.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                border_radius: BorderRadius::all(Val::Px(3.0)),
+                                column_gap: Val::Px(16.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.05, 0.075, 0.11, 0.88)),
+                            BorderColor::all(Color::srgba(0.45, 0.56, 0.68, 0.72)),
+                        ))
+                        .with_children(|strip| {
+                            if last_reward.active {
+                                let outcome = if last_reward.victory {
+                                    "Победа"
+                                } else if last_reward.early_exit {
+                                    "Досрочный выход"
+                                } else {
+                                    "Поражение"
+                                };
+                                let bonus = if last_reward.random_bonus {
+                                    " +10% случ."
+                                } else {
+                                    ""
+                                };
+                                strip.spawn((
+                                    Text::new(format!(
+                                        "Прошлый бой ({outcome}{bonus}): +{} сер.  +{} оп.  •  Фраги: {}  Проб.: {}  Урон: {:.0}",
+                                        last_reward.credits_earned,
+                                        last_reward.xp_earned,
+                                        last_reward.kills,
+                                        last_reward.penetrations,
+                                        last_reward.damage
+                                    )),
+                                    TextFont::from_font_size(11.0),
+                                    TextColor(if last_reward.victory {
+                                        Color::srgb(0.60, 0.95, 0.62)
+                                    } else {
+                                        Color::srgb(0.95, 0.84, 0.56)
+                                    }),
+                                ));
+                            }
+                            if let Some((ref msg, col)) = view.notice {
+                                strip.spawn((
+                                    Text::new(msg.clone()),
+                                    TextFont::from_font_size(11.0),
+                                    TextColor(col),
+                                ));
+                            }
+                        });
+                }
             });
 
             // 2. СРЕДНЯЯ ЗОНА: ЛЕВОЕ МЕНЮ (РЕЖИМЫ И КАРТЫ), СВОБОДНЫЙ ЦЕНТР С ТАНКОМ, ПРАВЫЕ КАРТОЧКИ
@@ -995,19 +1780,19 @@ pub fn setup_hangar(
                     Node {
                         width: Val::Px(232.0),
                         flex_direction: FlexDirection::Column,
-                        padding: UiRect::all(Val::Px(10.0)),
+                        padding: UiRect::all(Val::Px(9.0)),
                         border: UiRect::all(Val::Px(1.0)),
                         border_radius: BorderRadius::all(Val::Px(4.0)),
-                        row_gap: Val::Px(6.0),
+                        row_gap: Val::Px(5.0),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(0.035, 0.05, 0.068, 0.80)),
+                    BackgroundColor(Color::srgba(0.035, 0.05, 0.068, 0.82)),
                     BorderColor::all(Color::srgba(0.30, 0.36, 0.44, 0.65)),
                 ))
                 .with_children(|left| {
                     left.spawn((
                         Text::new("РЕЖИМЫ И ИНСПЕКЦИЯ"),
-                        TextFont::from_font_size(11.0),
+                        TextFont::from_font_size(10.5),
                         TextColor(Color::srgb(0.64, 0.72, 0.80)),
                     ));
 
@@ -1016,7 +1801,7 @@ pub fn setup_hangar(
                         Interaction::default(),
                         HangarButton::ToggleMode,
                         Node {
-                            padding: UiRect::axes(Val::Px(10.0), Val::Px(7.0)),
+                            padding: UiRect::axes(Val::Px(9.0), Val::Px(6.0)),
                             border: UiRect::all(Val::Px(1.5)),
                             border_radius: BorderRadius::all(Val::Px(3.0)),
                             ..default()
@@ -1036,7 +1821,7 @@ pub fn setup_hangar(
                         b.spawn((
                             HangarLabel::ToggleMode,
                             Text::new(format!("Режим [M]: {}", mode.ru_label())),
-                            TextFont::from_font_size(12.5),
+                            TextFont::from_font_size(12.0),
                             TextColor(Color::WHITE),
                         ));
                     });
@@ -1046,7 +1831,7 @@ pub fn setup_hangar(
                         Interaction::default(),
                         HangarButton::ToggleXray,
                         Node {
-                            padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                            padding: UiRect::axes(Val::Px(9.0), Val::Px(5.0)),
                             border: UiRect::all(Val::Px(1.0)),
                             border_radius: BorderRadius::all(Val::Px(3.0)),
                             ..default()
@@ -1062,7 +1847,7 @@ pub fn setup_hangar(
                             } else {
                                 "Броня/экипаж [V]"
                             }),
-                            TextFont::from_font_size(12.5),
+                            TextFont::from_font_size(12.0),
                             TextColor(Color::srgb(0.86, 0.94, 1.0)),
                         ));
                     });
@@ -1072,7 +1857,7 @@ pub fn setup_hangar(
                         Interaction::default(),
                         HangarButton::ToggleSpin,
                         Node {
-                            padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
+                            padding: UiRect::axes(Val::Px(9.0), Val::Px(4.0)),
                             border: UiRect::all(Val::Px(1.0)),
                             border_radius: BorderRadius::all(Val::Px(3.0)),
                             ..default()
@@ -1092,20 +1877,60 @@ pub fn setup_hangar(
                             } else {
                                 "Поворот [O]: ВЫКЛ"
                             }),
-                            TextFont::from_font_size(12.0),
+                            TextFont::from_font_size(11.5),
                             TextColor(Color::srgb(0.80, 0.87, 0.94)),
                         ));
                     });
 
                     left.spawn((
                         Node {
-                            margin: UiRect::top(Val::Px(4.0)),
+                            margin: UiRect::top(Val::Px(3.0)),
                             ..default()
                         },
                         Text::new("КАРТА БОЯ [Q / E]"),
-                        TextFont::from_font_size(11.0),
+                        TextFont::from_font_size(10.5),
                         TextColor(Color::srgb(0.64, 0.72, 0.80)),
                     ));
+
+                    let is_random = selected_map.0 == RANDOM_MAP_ID;
+                    left.spawn((
+                        Interaction::default(),
+                        HangarButton::SelectRandomMap,
+                        Node {
+                            padding: UiRect::axes(Val::Px(9.0), Val::Px(4.0)),
+                            border: UiRect {
+                                left: Val::Px(if is_random { 3.0 } else { 1.0 }),
+                                top: Val::Px(1.0),
+                                right: Val::Px(1.0),
+                                bottom: Val::Px(1.0),
+                            },
+                            border_radius: BorderRadius::all(Val::Px(3.0)),
+                            flex_direction: FlexDirection::Column,
+                            ..default()
+                        },
+                        BackgroundColor(if is_random {
+                            Color::srgba(0.22, 0.18, 0.08, 0.94)
+                        } else {
+                            Color::srgba(0.06, 0.08, 0.11, 0.78)
+                        }),
+                        BorderColor::all(if is_random {
+                            Color::srgb(0.95, 0.76, 0.36)
+                        } else {
+                            Color::srgba(0.24, 0.30, 0.36, 0.75)
+                        }),
+                    ))
+                    .with_children(|b| {
+                        b.spawn((
+                            Text::new("Случайная карта"),
+                            TextFont::from_font_size(12.0),
+                            TextColor(Color::srgb(0.98, 0.88, 0.56)),
+                        ));
+                        b.spawn((
+                            Text::new("Автовыбор (+10% награда)"),
+                            TextFont::from_font_size(10.0),
+                            TextColor(Color::srgb(0.76, 0.74, 0.62)),
+                        ));
+                    });
 
                     for (i, m) in maps.iter().enumerate() {
                         let active = m.id == selected_map.0;
@@ -1113,7 +1938,7 @@ pub fn setup_hangar(
                             Interaction::default(),
                             HangarButton::SelectMap(i),
                             Node {
-                                padding: UiRect::axes(Val::Px(9.0), Val::Px(5.0)),
+                                padding: UiRect::axes(Val::Px(9.0), Val::Px(4.0)),
                                 border: UiRect {
                                     left: Val::Px(if active { 3.0 } else { 1.0 }),
                                     top: Val::Px(1.0),
@@ -1138,31 +1963,30 @@ pub fn setup_hangar(
                         .with_children(|b| {
                             b.spawn((
                                 Text::new(m.name.clone()),
-                                TextFont::from_font_size(12.5),
+                                TextFont::from_font_size(12.0),
                                 TextColor(Color::srgb(0.92, 0.95, 0.98)),
                             ));
                             b.spawn((
                                 Text::new(biome_short_ru(m.biome)),
-                                TextFont::from_font_size(10.5),
+                                TextFont::from_font_size(10.0),
                                 TextColor(Color::srgb(0.64, 0.74, 0.84)),
                             ));
                         });
                     }
                 });
 
-                // Правая панель WoT: карточка карты/противников + карточка ТТХ со шкалами.
+                // Правая панель WoT: карточка карты/составов 5v5 + карточка ТТХ со шкалами.
                 mid.spawn(Node {
                     width: Val::Px(308.0),
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(8.0),
+                    row_gap: Val::Px(6.0),
                     ..default()
                 })
                 .with_children(|right| {
-                    // Карточка брифинга карты.
                     right
                         .spawn((
                             Node {
-                                padding: UiRect::all(Val::Px(10.0)),
+                                padding: UiRect::all(Val::Px(9.0)),
                                 border: UiRect {
                                     left: Val::Px(3.0),
                                     top: Val::Px(1.0),
@@ -1175,36 +1999,31 @@ pub fn setup_hangar(
                                 ..default()
                             },
                             BackgroundColor(Color::srgba(0.04, 0.055, 0.075, 0.86)),
-                            BorderColor::all(biome_accent(map_spec.biome)),
+                            BorderColor::all(brief_accent),
                         ))
                         .with_children(|mc| {
                             mc.spawn((
                                 HangarLabel::MapBriefTitle,
-                                Text::new(format!("{}  •  {}", map_spec.name, biome_short_ru(map_spec.biome))),
-                                TextFont::from_font_size(13.5),
+                                Text::new(brief_title),
+                                TextFont::from_font_size(13.0),
                                 TextColor(Color::srgb(0.96, 0.90, 0.66)),
                             ));
                             mc.spawn((
                                 HangarLabel::MapBriefBody,
-                                Text::new(format!(
-                                    "{}\n{}",
-                                    map_spec.description,
-                                    enemy_lineup_ru(&map_spec)
-                                )),
-                                TextFont::from_font_size(11.5),
+                                Text::new(brief_body),
+                                TextFont::from_font_size(10.5),
                                 TextColor(Color::srgb(0.78, 0.84, 0.90)),
                             ));
                         });
 
-                    // Карточка характеристик машины со шкалами в стиле WoT.
                     right
                         .spawn((
                             Node {
-                                padding: UiRect::all(Val::Px(10.0)),
+                                padding: UiRect::all(Val::Px(9.0)),
                                 border: UiRect::all(Val::Px(1.0)),
                                 border_radius: BorderRadius::all(Val::Px(4.0)),
                                 flex_direction: FlexDirection::Column,
-                                row_gap: Val::Px(6.0),
+                                row_gap: Val::Px(5.0),
                                 ..default()
                             },
                             BackgroundColor(Color::srgba(0.04, 0.055, 0.075, 0.86)),
@@ -1213,7 +2032,7 @@ pub fn setup_hangar(
                         .with_children(|ttx| {
                             ttx.spawn((
                                 Text::new("ХАРАКТЕРИСТИКИ МАШИНЫ"),
-                                TextFont::from_font_size(11.5),
+                                TextFont::from_font_size(11.0),
                                 TextColor(Color::srgb(0.95, 0.76, 0.36)),
                             ));
 
@@ -1251,13 +2070,13 @@ pub fn setup_hangar(
                                 .with_children(|row| {
                                     row.spawn((
                                         Text::new(title),
-                                        TextFont::from_font_size(11.0),
+                                        TextFont::from_font_size(10.5),
                                         TextColor(Color::srgb(0.76, 0.82, 0.88)),
                                     ));
                                     row.spawn((
                                         Node {
                                             width: Val::Percent(100.0),
-                                            height: Val::Px(6.0),
+                                            height: Val::Px(5.5),
                                             border_radius: BorderRadius::all(Val::Px(2.0)),
                                             ..default()
                                         },
@@ -1280,31 +2099,31 @@ pub fn setup_hangar(
 
                             ttx.spawn((
                                 HangarLabel::Info,
-                                Text::new(format_hangar_ttx_compact(&spec)),
-                                TextFont::from_font_size(11.0),
+                                Text::new(format_hangar_ttx_compact(preview_spec)),
+                                TextFont::from_font_size(10.5),
                                 TextColor(Color::srgb(0.80, 0.86, 0.92)),
                             ));
                         });
                 });
             });
 
-            // 3. НИЖНИЙ БЛОК: ЭКИПАЖ И БОЕКОМПЛЕКТ НАД КАРУСЕЛЬЮ + КАРУСЕЛЬ ИЗ 5 ТАНКОВ + ПОДСКАЗКИ
+            // 3. НИЖНИЙ БЛОК: ЭКИПАЖ/БК + ФИЛЬТРЫ НАЦИЙ + КАРУСЕЛЬ ТЕХНИКИ + ПОДСКАЗКИ
             root.spawn(Node {
                 width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                row_gap: Val::Px(6.0),
+                row_gap: Val::Px(5.0),
                 ..default()
             })
             .with_children(|bottom| {
-                // Полоса экипажа (4 танкиста) и боекомплекта/расходников прямо под танком, как в WoT.
+                // Полоса экипажа и боекомплекта.
                 bottom
                     .spawn((
                         Node {
-                            padding: UiRect::axes(Val::Px(12.0), Val::Px(5.0)),
+                            padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
                             border: UiRect::all(Val::Px(1.0)),
                             border_radius: BorderRadius::all(Val::Px(4.0)),
-                            column_gap: Val::Px(10.0),
+                            column_gap: Val::Px(8.0),
                             align_items: AlignItems::Center,
                             ..default()
                         },
@@ -1312,7 +2131,6 @@ pub fn setup_hangar(
                         BorderColor::all(Color::srgba(0.34, 0.40, 0.48, 0.7)),
                     ))
                     .with_children(|strip| {
-                        // 4 слота экипажа.
                         for role in [
                             CrewRole::Commander,
                             CrewRole::Gunner,
@@ -1322,7 +2140,7 @@ pub fn setup_hangar(
                             strip
                                 .spawn((
                                     Node {
-                                        padding: UiRect::axes(Val::Px(7.0), Val::Px(3.0)),
+                                        padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
                                         border: UiRect::all(Val::Px(1.0)),
                                         border_radius: BorderRadius::all(Val::Px(3.0)),
                                         ..default()
@@ -1333,7 +2151,7 @@ pub fn setup_hangar(
                                 .with_children(|slot| {
                                     slot.spawn((
                                         Text::new(role.ru_short()),
-                                        TextFont::from_font_size(11.0),
+                                        TextFont::from_font_size(10.5),
                                         TextColor(Color::srgb(0.88, 0.92, 0.80)),
                                     ));
                                 });
@@ -1341,15 +2159,14 @@ pub fn setup_hangar(
 
                         strip.spawn((
                             Text::new("│"),
-                            TextFont::from_font_size(14.0),
+                            TextFont::from_font_size(13.0),
                             TextColor(Color::srgba(0.40, 0.46, 0.54, 0.8)),
                         ));
 
-                        // Слот единственного снаряда (AP-Only до следующих обновлений).
                         strip
                             .spawn((
                                 Node {
-                                    padding: UiRect::axes(Val::Px(9.0), Val::Px(3.0)),
+                                    padding: UiRect::axes(Val::Px(8.0), Val::Px(2.0)),
                                     border: UiRect::all(Val::Px(1.5)),
                                     border_radius: BorderRadius::all(Val::Px(3.0)),
                                     ..default()
@@ -1360,18 +2177,20 @@ pub fn setup_hangar(
                             .with_children(|slot| {
                                 slot.spawn((
                                     HangarLabel::ShellSlot,
-                                    Text::new(format!("[1] {:.0}мм SolidAP", spec.shell.caliber_mm)),
-                                    TextFont::from_font_size(11.5),
+                                    Text::new(format!(
+                                        "[1] {:.0}мм SolidAP",
+                                        preview_spec.shell.caliber_mm
+                                    )),
+                                    TextFont::from_font_size(11.0),
                                     TextColor(Color::srgb(1.0, 0.90, 0.68)),
                                 ));
                             });
 
-                        // Слоты расходников `[5]` и `[6]`.
                         for label in ["[5] Ремк. ×2", "[6] Огнет. ×2"] {
                             strip
                                 .spawn((
                                     Node {
-                                        padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+                                        padding: UiRect::axes(Val::Px(7.0), Val::Px(2.0)),
                                         border: UiRect::all(Val::Px(1.0)),
                                         border_radius: BorderRadius::all(Val::Px(3.0)),
                                         ..default()
@@ -1382,22 +2201,70 @@ pub fn setup_hangar(
                                 .with_children(|slot| {
                                     slot.spawn((
                                         Text::new(label),
-                                        TextFont::from_font_size(11.0),
+                                        TextFont::from_font_size(10.5),
                                         TextColor(Color::srgb(0.82, 0.92, 0.98)),
                                     ));
                                 });
                         }
                     });
 
-                // Нижняя карусель 5 танков в стиле World of Tanks.
+                // Фильтры карусели: [В ангаре (N)] | [СССР] | [Германия] | [США] | [T Дерево].
+                bottom
+                    .spawn(Node {
+                        column_gap: Val::Px(6.0),
+                        align_items: AlignItems::Center,
+                        ..default()
+                    })
+                    .with_children(|tabs| {
+                        filter_tab_button(
+                            tabs,
+                            HangarFilter::AllOwned,
+                            format!("В ангаре ({owned_count})"),
+                            view.filter_tab == HangarFilter::AllOwned,
+                            Color::srgb(0.45, 0.88, 0.48),
+                        );
+                        for nation in Nation::all() {
+                            filter_tab_button(
+                                tabs,
+                                HangarFilter::Nation(nation),
+                                format!("{} (I–V)", nation.ru_name()),
+                                view.filter_tab == HangarFilter::Nation(nation),
+                                nation.accent(),
+                            );
+                        }
+                        tabs.spawn((
+                            Interaction::default(),
+                            HangarButton::ToggleTechTree,
+                            Node {
+                                padding: UiRect::axes(Val::Px(11.0), Val::Px(4.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                border_radius: BorderRadius::all(Val::Px(3.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.14, 0.22, 0.34, 0.92)),
+                            BorderColor::all(Color::srgb(0.50, 0.76, 0.98)),
+                        ))
+                        .with_children(|b| {
+                            b.spawn((
+                                Text::new("[T] Дерево исследований"),
+                                TextFont::from_font_size(11.5),
+                                TextColor(Color::srgb(0.88, 0.95, 1.0)),
+                            ));
+                        });
+                    });
+
+                // Нижняя карусель танков выбранного фильтра.
+                let compact = visible_indices.len() > 6;
                 bottom
                     .spawn((
                         Node {
                             width: Val::Percent(100.0),
-                            padding: UiRect::all(Val::Px(6.0)),
+                            padding: UiRect::all(Val::Px(5.0)),
                             border: UiRect::top(Val::Px(1.0)),
                             border_radius: BorderRadius::all(Val::Px(4.0)),
-                            column_gap: Val::Px(8.0),
+                            column_gap: Val::Px(6.0),
+                            row_gap: Val::Px(5.0),
+                            flex_wrap: FlexWrap::Wrap,
                             justify_content: JustifyContent::Center,
                             ..default()
                         },
@@ -1405,73 +2272,140 @@ pub fn setup_hangar(
                         BorderColor::all(Color::srgba(0.32, 0.38, 0.46, 0.72)),
                     ))
                     .with_children(|carousel| {
-                        for (i, t) in tanks.iter().enumerate() {
-                            let active = t.id == selected_tank.0.0;
+                        for (slot_i, &g_idx) in visible_indices.iter().enumerate() {
+                            let t = &all_tanks[g_idx];
                             let tm = tank_wot_meta(t);
+                            let owned = is_owned(prog, &t.id);
+                            let researched = is_researched(prog, &t.id);
+                            let is_combat = t.id == combat_spec.id;
+                            let is_preview = t.id == preview_spec.id;
+
+                            let status_badge = if is_combat {
+                                "В БОЮ"
+                            } else if is_preview {
+                                "ОСМОТР"
+                            } else if owned {
+                                tm.nation_short
+                            } else if researched {
+                                "ОТКРЫТ"
+                            } else {
+                                "ЗАКРЫТ"
+                            };
+
+                            let card_bg = if is_combat && is_preview {
+                                Color::srgba(0.20, 0.24, 0.14, 0.96)
+                            } else if is_preview {
+                                Color::srgba(0.14, 0.20, 0.28, 0.96)
+                            } else if owned {
+                                Color::srgba(0.07, 0.10, 0.12, 0.92)
+                            } else if researched {
+                                Color::srgba(0.13, 0.12, 0.08, 0.90)
+                            } else {
+                                Color::srgba(0.045, 0.055, 0.075, 0.85)
+                            };
+
+                            let card_border = if is_preview {
+                                Color::srgb(0.96, 0.64, 0.20)
+                            } else if is_combat {
+                                Color::srgb(0.42, 0.86, 0.44)
+                            } else if owned {
+                                tm.accent
+                            } else if researched {
+                                Color::srgb(0.76, 0.62, 0.26)
+                            } else {
+                                Color::srgba(0.22, 0.26, 0.34, 0.8)
+                            };
+
+                            let sub_line = if owned {
+                                format!(
+                                    "{:.0}мм • {:.0} HP • {:.0} км/ч",
+                                    t.shell.caliber_mm, t.max_hp, t.max_speed_kmh
+                                )
+                            } else if researched {
+                                format!("Купить: {} сер.", t.credit_cost)
+                            } else {
+                                format!("{} оп. / {} сер.", t.xp_cost, t.credit_cost)
+                            };
+
                             carousel
                                 .spawn((
                                     Interaction::default(),
-                                    HangarButton::SelectTank(i),
+                                    HangarButton::SelectTank(g_idx),
                                     Node {
-                                        flex_grow: 1.0,
-                                        min_width: Val::Px(150.0),
-                                        max_width: Val::Px(245.0),
-                                        padding: UiRect::axes(Val::Px(10.0), Val::Px(7.0)),
+                                        flex_grow: if compact { 0.0 } else { 1.0 },
+                                        min_width: Val::Px(if compact { 132.0 } else { 148.0 }),
+                                        max_width: Val::Px(if compact { 166.0 } else { 235.0 }),
+                                        padding: UiRect::axes(
+                                            Val::Px(9.0),
+                                            Val::Px(if compact { 4.0 } else { 6.0 }),
+                                        ),
                                         border: UiRect {
                                             top: Val::Px(3.0),
-                                            left: Val::Px(if active { 2.0 } else { 1.0 }),
-                                            right: Val::Px(if active { 2.0 } else { 1.0 }),
-                                            bottom: Val::Px(if active { 2.0 } else { 1.0 }),
+                                            left: Val::Px(if is_preview { 2.0 } else { 1.0 }),
+                                            right: Val::Px(if is_preview { 2.0 } else { 1.0 }),
+                                            bottom: Val::Px(if is_preview { 2.0 } else { 1.0 }),
                                         },
                                         border_radius: BorderRadius::all(Val::Px(4.0)),
                                         flex_direction: FlexDirection::Column,
-                                        row_gap: Val::Px(3.0),
+                                        row_gap: Val::Px(2.0),
                                         ..default()
                                     },
-                                    BackgroundColor(if active {
-                                        Color::srgba(0.20, 0.24, 0.14, 0.96)
-                                    } else {
-                                        Color::srgba(0.07, 0.09, 0.12, 0.90)
-                                    }),
-                                    BorderColor::all(if active {
-                                        Color::srgb(0.96, 0.64, 0.20)
-                                    } else {
-                                        tm.accent
-                                    }),
+                                    BackgroundColor(card_bg),
+                                    BorderColor::all(card_border),
                                 ))
                                 .with_children(|card| {
-                                    // Верхняя строчка карточки: [клавиша], уровень/класс и нация.
                                     card.spawn(Node {
                                         width: Val::Percent(100.0),
                                         justify_content: JustifyContent::SpaceBetween,
                                         ..default()
                                     })
                                     .with_children(|top_row| {
+                                        let key_str = if slot_i < 9 {
+                                            format!("[{}] ", slot_i + 1)
+                                        } else {
+                                            String::new()
+                                        };
                                         top_row.spawn((
-                                            Text::new(format!("[{}] {} {} {}", i + 1, tm.tier, tm.class_icon, tm.class_short)),
-                                            TextFont::from_font_size(11.0),
+                                            Text::new(format!(
+                                                "{key_str}{} {} {}",
+                                                tm.tier, tm.class_icon, tm.class_short
+                                            )),
+                                            TextFont::from_font_size(10.5),
                                             TextColor(Color::srgb(0.96, 0.80, 0.42)),
                                         ));
                                         top_row.spawn((
-                                            Text::new(tm.nation_short),
-                                            TextFont::from_font_size(10.5),
-                                            TextColor(Color::srgb(0.68, 0.75, 0.82)),
+                                            Text::new(status_badge),
+                                            TextFont::from_font_size(10.0),
+                                            TextColor(if is_combat {
+                                                Color::srgb(0.50, 0.94, 0.56)
+                                            } else if researched && !owned {
+                                                Color::srgb(0.96, 0.80, 0.36)
+                                            } else if !owned {
+                                                Color::srgb(0.58, 0.64, 0.72)
+                                            } else {
+                                                Color::srgb(0.70, 0.78, 0.86)
+                                            }),
                                         ));
                                     });
-                                    // Имя танка.
                                     card.spawn((
                                         Text::new(t.name.clone()),
-                                        TextFont::from_font_size(13.5),
-                                        TextColor(Color::srgb(0.96, 0.97, 0.99)),
+                                        TextFont::from_font_size(if compact { 12.0 } else { 13.0 }),
+                                        TextColor(if owned || researched {
+                                            Color::srgb(0.96, 0.97, 0.99)
+                                        } else {
+                                            Color::srgb(0.64, 0.70, 0.78)
+                                        }),
                                     ));
-                                    // Краткие боевые характеристики.
                                     card.spawn((
-                                        Text::new(format!(
-                                            "{:.0}мм • {:.0} HP • {:.0} км/ч",
-                                            t.shell.caliber_mm, t.max_hp, t.max_speed_kmh
-                                        )),
-                                        TextFont::from_font_size(11.0),
-                                        TextColor(Color::srgb(0.72, 0.78, 0.86)),
+                                        Text::new(sub_line),
+                                        TextFont::from_font_size(10.0),
+                                        TextColor(if owned {
+                                            Color::srgb(0.72, 0.78, 0.86)
+                                        } else if researched {
+                                            Color::srgb(0.95, 0.82, 0.45)
+                                        } else {
+                                            Color::srgb(0.54, 0.60, 0.68)
+                                        }),
                                     ));
                                 });
                         }
@@ -1480,13 +2414,124 @@ pub fn setup_hangar(
                 // Сервисная строка управления в самом низу.
                 bottom.spawn((
                     Text::new(
-                        "ЛКМ/ПКМ: 360° осмотр  •  Колёсико: зум  •  1–5 / ←→: танк  •  Q / E: карта  •  M: режим  •  V: рентген  •  O: поворот  •  N: звук  •  Enter: в бой",
+                        "ЛКМ/ПКМ: 360° осмотр  •  Колёсико: зум  •  1–9 / ←→: танк  •  Q / E: карта  •  T: дерево  •  M: режим  •  V: рентген  •  O: поворот  •  N: звук  •  Enter: в бой",
                     ),
                     TextFont::from_font_size(10.5),
                     TextColor(Color::srgb(0.62, 0.68, 0.76)),
                 ));
             });
+
+            // 4. МОДАЛЬНОЕ ОКНО ДЕРЕВА ИССЛЕДОВАНИЙ `[T]`
+            if view.show_tech_tree {
+                spawn_tech_tree_modal(root, all_tanks, prog, selected_tank, view);
+            }
         });
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn setup_hangar(
+    mut commands: Commands,
+    mut selected_tank: ResMut<SelectedTank>,
+    selected_map: Res<SelectedMap>,
+    mode: Res<DamageRulesMode>,
+    mut view: ResMut<HangarViewState>,
+    mut prog_opt: Option<ResMut<PlayerProgression>>,
+    last_reward_opt: Option<Res<LastBattleReward>>,
+    audio: Option<Res<AudioSettings>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    assets: Res<VoxelAssets>,
+) {
+    commands.insert_resource(ClearColor(Color::srgb(0.055, 0.072, 0.096)));
+    commands.insert_resource(GlobalAmbientLight {
+        color: Color::srgb(0.58, 0.72, 0.90),
+        brightness: 320.0,
+        ..default()
+    });
+
+    if let Some(ref mut prog) = prog_opt {
+        ensure_starters(prog);
+        if !is_owned(prog, &selected_tank.0.0) {
+            selected_tank.0 = TankId("ms_1".into());
+        }
+    }
+    let default_prog = PlayerProgression::default();
+    let prog = prog_opt.as_deref().unwrap_or(&default_prog);
+    let default_last = LastBattleReward::default();
+    let last_reward = last_reward_opt.as_deref().unwrap_or(&default_last);
+
+    let combat_spec = owned_combat_spec(&selected_tank, prog);
+    selected_tank.0 = TankId(combat_spec.id.clone());
+
+    view.show_tech_tree = false;
+    view.notice = None;
+    view.prev_pressed_btn = None;
+    view.suppress_click_frames = 0;
+    if view.preview_tank_id.is_empty() || load_tank_spec(&view.preview_tank_id).is_none() {
+        view.preview_tank_id = combat_spec.id.clone();
+    }
+    let preview_spec = load_tank_spec(&view.preview_tank_id).unwrap_or(combat_spec);
+    view.spawned_preview_id = preview_spec.id.clone();
+
+    spawn_hangar_environment(&mut commands, &mut meshes, &mut materials, &assets);
+
+    let preview = spawn_preview_tank(&mut commands, &mut meshes, &assets, &preview_spec);
+    if view.xray_armor {
+        commands.entity(preview).insert(Visibility::Hidden);
+    }
+    let xray_root = spawn_xray_overlay(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &preview_spec,
+        view.xray_armor,
+    );
+
+    // Стенд вращает саму машину над ямой при включённом автоповороте.
+    commands
+        .spawn((
+            Name::new("HangarTurntable"),
+            HangarTurntable,
+            Transform::IDENTITY,
+            Visibility::default(),
+            DespawnOnExit(GameState::Hangar),
+        ))
+        .add_children(&[preview, xray_root]);
+
+    let cam_pos = hangar_camera_pos(&view);
+    commands.spawn((
+        HangarCamera,
+        Camera3d::default(),
+        DistanceFog {
+            color: Color::srgba(0.065, 0.088, 0.116, 0.96),
+            directional_light_color: Color::NONE,
+            directional_light_exponent: 8.0,
+            falloff: FogFalloff::Linear {
+                start: 10.5,
+                end: 42.0,
+            },
+        },
+        Transform::from_translation(cam_pos).looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
+        DespawnOnExit(GameState::Hangar),
+    ));
+
+    let all_tanks = available_tanks();
+    let maps = available_maps();
+    let muted = audio.as_ref().is_some_and(|a| a.muted);
+
+    spawn_hangar_ui(
+        &mut commands,
+        &all_tanks,
+        &maps,
+        &selected_tank,
+        &selected_map,
+        *mode,
+        &view,
+        prog,
+        last_reward,
+        &preview_spec,
+        muted,
+    );
 }
 
 fn hangar_camera_pos(view: &HangarViewState) -> Vec3 {
@@ -1516,6 +2561,10 @@ pub fn update_hangar(
     mut selected_map: ResMut<SelectedMap>,
     mut mode: ResMut<DamageRulesMode>,
     mut view: ResMut<HangarViewState>,
+    mut prog_pair: (
+        Option<ResMut<PlayerProgression>>,
+        Option<Res<LastBattleReward>>,
+    ),
     mut audio_pair: (
         Option<ResMut<AudioSettings>>,
         Option<ResMut<Messages<UiSoundMessage>>>,
@@ -1531,6 +2580,7 @@ pub fn update_hangar(
         Query<(Entity, &mut Visibility), With<HangarXrayRoot>>,
         Query<&mut Transform, With<HangarCamera>>,
     )>,
+    ui_roots: Query<Entity, With<HangarUiRoot>>,
     mut labels: Query<(&HangarLabel, &mut Text)>,
     mut bars: Query<(&HangarBar, &mut Node)>,
     mut btns: Query<(
@@ -1541,101 +2591,286 @@ pub fn update_hangar(
     )>,
 ) {
     let (keys, mouse_btn, motion, scroll) = input;
-    let tanks = available_tanks();
-    let cur_idx = tanks
-        .iter()
-        .position(|t| t.id == selected_tank.0.0)
-        .unwrap_or(0);
-    let mut new_idx: Option<usize> = None;
-
+    let all_tanks = available_tanks();
     let maps = available_maps();
-    let cur_map_idx = maps
-        .iter()
-        .position(|m| m.id == selected_map.0)
-        .unwrap_or(0);
-    let mut new_map_idx: Option<usize> = None;
+    let total_map_choices = maps.len() + 1;
 
-    let digit_keys = [
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-        KeyCode::Digit5,
-    ];
-    for (i, &k) in digit_keys.iter().enumerate() {
-        if keys.just_pressed(k) && i < tanks.len() {
-            new_idx = Some(i);
+    let default_prog = PlayerProgression::default();
+    let (prog_snapshot, mut ui_dirty) = {
+        let snap = prog_pair.0.as_deref().unwrap_or(&default_prog).clone();
+        (snap, false)
+    };
+
+    if let Some(ref mut prog) = prog_pair.0 {
+        ensure_starters(prog);
+        if !is_owned(prog, &selected_tank.0.0) {
+            selected_tank.0 = TankId("ms_1".into());
+            ui_dirty = true;
         }
     }
-    if keys.just_pressed(KeyCode::ArrowRight) && !tanks.is_empty() {
-        new_idx = Some((cur_idx + 1) % tanks.len());
-    }
-    if keys.just_pressed(KeyCode::ArrowLeft) && !tanks.is_empty() {
-        new_idx = Some((cur_idx + tanks.len() - 1) % tanks.len());
-    }
-    if keys.just_pressed(KeyCode::KeyE) && !maps.is_empty() {
-        new_map_idx = Some((cur_map_idx + 1) % maps.len());
-    }
-    if keys.just_pressed(KeyCode::KeyQ) && !maps.is_empty() {
-        new_map_idx = Some((cur_map_idx + maps.len() - 1) % maps.len());
+
+    let visible_indices = filtered_carousel_indices(&all_tanks, &prog_snapshot, view.filter_tab);
+    let cur_vis_pos = visible_indices
+        .iter()
+        .position(|&gi| all_tanks[gi].id == view.preview_tank_id)
+        .unwrap_or(0);
+
+    let mut new_global_idx: Option<usize> = None;
+    let cur_map_choice = if selected_map.0 == RANDOM_MAP_ID {
+        0
+    } else {
+        maps.iter()
+            .position(|m| m.id == selected_map.0)
+            .map_or(1, |i| i + 1)
+    };
+    let mut new_map_choice: Option<usize> = None;
+
+    if !view.show_tech_tree {
+        let digit_keys = [
+            KeyCode::Digit1,
+            KeyCode::Digit2,
+            KeyCode::Digit3,
+            KeyCode::Digit4,
+            KeyCode::Digit5,
+            KeyCode::Digit6,
+            KeyCode::Digit7,
+            KeyCode::Digit8,
+            KeyCode::Digit9,
+        ];
+        for (i, &k) in digit_keys.iter().enumerate() {
+            if keys.just_pressed(k) && i < visible_indices.len() {
+                new_global_idx = Some(visible_indices[i]);
+            }
+        }
+        if keys.just_pressed(KeyCode::ArrowRight) && !visible_indices.is_empty() {
+            let next_pos = (cur_vis_pos + 1) % visible_indices.len();
+            new_global_idx = Some(visible_indices[next_pos]);
+        }
+        if keys.just_pressed(KeyCode::ArrowLeft) && !visible_indices.is_empty() {
+            let prev_pos = (cur_vis_pos + visible_indices.len() - 1) % visible_indices.len();
+            new_global_idx = Some(visible_indices[prev_pos]);
+        }
+        if keys.just_pressed(KeyCode::KeyE) && total_map_choices > 1 {
+            new_map_choice = Some((cur_map_choice + 1) % total_map_choices);
+        }
+        if keys.just_pressed(KeyCode::KeyQ) && total_map_choices > 1 {
+            new_map_choice = Some((cur_map_choice + total_map_choices - 1) % total_map_choices);
+        }
     }
 
     let mut ui_hovered = false;
     let mut toggle_xray = keys.just_pressed(KeyCode::KeyV);
     let mut toggle_mode = keys.just_pressed(KeyCode::KeyM);
     let mut toggle_spin = keys.just_pressed(KeyCode::KeyO);
+    let mut toggle_tree = keys.just_pressed(KeyCode::KeyT)
+        || (view.show_tech_tree && keys.just_pressed(KeyCode::Escape));
     let mut toggle_audio = false;
     let mut xray_pressed_now = false;
     let mut mode_pressed_now = false;
     let mut spin_pressed_now = false;
     let mut audio_pressed_now = false;
-    let mut start = keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space);
+    let mut pressed_btn_now: Option<HangarButton> = None;
+    let mut start = !view.show_tech_tree
+        && (keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space));
 
     for (btn, interaction, _, _) in &btns {
         if *interaction != Interaction::None {
             ui_hovered = true;
         }
         if *interaction == Interaction::Pressed {
+            if *btn != HangarButton::Noop || pressed_btn_now.is_none() {
+                pressed_btn_now = Some(*btn);
+            }
             match *btn {
-                HangarButton::SelectTank(i) if i < tanks.len() => new_idx = Some(i),
-                HangarButton::SelectMap(i) if i < maps.len() => new_map_idx = Some(i),
                 HangarButton::ToggleMode => mode_pressed_now = true,
                 HangarButton::ToggleXray => xray_pressed_now = true,
                 HangarButton::ToggleSpin => spin_pressed_now = true,
                 HangarButton::ToggleAudio => audio_pressed_now = true,
-                HangarButton::StartBattle => start = true,
+                HangarButton::StartBattle if view.suppress_click_frames == 0 => start = true,
                 _ => {}
             }
         }
     }
-    if xray_pressed_now && !view.prev_xray_btn {
-        toggle_xray = true;
+
+    let suppress_now = view.suppress_click_frames > 0;
+    if view.suppress_click_frames > 0 {
+        view.suppress_click_frames -= 1;
     }
-    if mode_pressed_now && !view.prev_mode_btn {
-        toggle_mode = true;
-    }
-    if spin_pressed_now && !view.prev_spin_btn {
-        toggle_spin = true;
-    }
-    if audio_pressed_now && !view.prev_audio_btn {
-        toggle_audio = true;
+
+    if !suppress_now {
+        if xray_pressed_now && !view.prev_xray_btn {
+            toggle_xray = true;
+        }
+        if mode_pressed_now && !view.prev_mode_btn {
+            toggle_mode = true;
+        }
+        if spin_pressed_now && !view.prev_spin_btn {
+            toggle_spin = true;
+        }
+        if audio_pressed_now && !view.prev_audio_btn {
+            toggle_audio = true;
+        }
     }
     view.prev_xray_btn = xray_pressed_now;
     view.prev_mode_btn = mode_pressed_now;
     view.prev_spin_btn = spin_pressed_now;
     view.prev_audio_btn = audio_pressed_now;
 
+    let just_pressed_btn = if suppress_now {
+        None
+    } else {
+        pressed_btn_now.filter(|b| *b != HangarButton::Noop && view.prev_pressed_btn != Some(*b))
+    };
+    view.prev_pressed_btn = pressed_btn_now;
+
     let mut clicked = false;
-    if let Some(i) = new_idx
-        && tanks[i].id != selected_tank.0.0
-    {
-        selected_tank.0 = TankId(tanks[i].id.clone());
-        clicked = true;
+    if let Some(btn) = just_pressed_btn {
+        match btn {
+            HangarButton::SelectTank(g_idx) if g_idx < all_tanks.len() => {
+                new_global_idx = Some(g_idx);
+            }
+            HangarButton::SelectRandomMap => new_map_choice = Some(0),
+            HangarButton::SelectMap(i) if i < maps.len() => new_map_choice = Some(i + 1),
+            HangarButton::ToggleTechTree => toggle_tree = true,
+            HangarButton::SelectFilter(next_filter) => {
+                if view.filter_tab != next_filter {
+                    view.filter_tab = next_filter;
+                    match next_filter {
+                        HangarFilter::AllOwned => {
+                            if !is_owned(&prog_snapshot, &view.preview_tank_id) {
+                                view.preview_tank_id = selected_tank.0.0.clone();
+                            }
+                        }
+                        HangarFilter::Nation(n) => {
+                            let same_nation = load_tank_spec(&view.preview_tank_id)
+                                .is_some_and(|s| s.nation_id == n);
+                            if !same_nation
+                                && let Some(best) = all_tanks
+                                    .iter()
+                                    .filter(|t| t.nation_id == n && is_owned(&prog_snapshot, &t.id))
+                                    .max_by_key(|t| t.tier)
+                                    .or_else(|| all_tanks.iter().find(|t| t.nation_id == n))
+                            {
+                                view.preview_tank_id = best.id.clone();
+                                if is_owned(&prog_snapshot, &best.id) {
+                                    selected_tank.0 = TankId(best.id.clone());
+                                }
+                            }
+                        }
+                    }
+                    view.notice = None;
+                    ui_dirty = true;
+                    clicked = true;
+                }
+            }
+            HangarButton::InspectTank(g_idx) if g_idx < all_tanks.len() => {
+                let target = &all_tanks[g_idx];
+                view.preview_tank_id = target.id.clone();
+                if is_owned(&prog_snapshot, &target.id) {
+                    selected_tank.0 = TankId(target.id.clone());
+                }
+                view.filter_tab = HangarFilter::Nation(target.nation_id);
+                view.show_tech_tree = false;
+                view.notice = None;
+                ui_dirty = true;
+                clicked = true;
+            }
+            HangarButton::SelectOwnedAndClose(g_idx) if g_idx < all_tanks.len() => {
+                let target = &all_tanks[g_idx];
+                view.preview_tank_id = target.id.clone();
+                if is_owned(&prog_snapshot, &target.id) {
+                    selected_tank.0 = TankId(target.id.clone());
+                }
+                view.show_tech_tree = false;
+                view.notice = None;
+                ui_dirty = true;
+                clicked = true;
+            }
+            HangarButton::ResearchTank(g_idx) if g_idx < all_tanks.len() => {
+                let target = &all_tanks[g_idx];
+                if let Some(ref mut prog) = prog_pair.0 {
+                    match research_tank(prog, target) {
+                        Ok(()) => {
+                            view.preview_tank_id = target.id.clone();
+                            view.notice = Some((
+                                format!("Исследован {}! Доступно {} оп.", target.name, prog.xp),
+                                Color::srgb(0.44, 0.88, 1.0),
+                            ));
+                        }
+                        Err(err) => {
+                            view.notice = Some((
+                                format!("{}: {err}", target.name),
+                                Color::srgb(0.98, 0.45, 0.36),
+                            ));
+                        }
+                    }
+                    ui_dirty = true;
+                    view.suppress_click_frames = 2;
+                    clicked = true;
+                }
+            }
+            HangarButton::BuyTank(g_idx) if g_idx < all_tanks.len() => {
+                let target = &all_tanks[g_idx];
+                if let Some(ref mut prog) = prog_pair.0 {
+                    match buy_tank(prog, target) {
+                        Ok(()) => {
+                            view.preview_tank_id = target.id.clone();
+                            selected_tank.0 = TankId(target.id.clone());
+                            view.notice = Some((
+                                format!("Куплен {} и выбран для боя!", target.name),
+                                Color::srgb(0.45, 0.94, 0.52),
+                            ));
+                        }
+                        Err(err) => {
+                            view.notice = Some((
+                                format!("{}: {err}", target.name),
+                                Color::srgb(0.98, 0.45, 0.36),
+                            ));
+                        }
+                    }
+                    ui_dirty = true;
+                    view.suppress_click_frames = 2;
+                    clicked = true;
+                }
+            }
+            _ => {}
+        }
     }
-    if let Some(i) = new_map_idx
-        && maps[i].id != selected_map.0
+
+    if let Some(g_idx) = new_global_idx
+        && g_idx < all_tanks.len()
     {
-        selected_map.0 = maps[i].id.clone();
+        let target = &all_tanks[g_idx];
+        let latest_prog = prog_pair.0.as_deref().unwrap_or(&default_prog);
+        let owned = is_owned(latest_prog, &target.id);
+        let changed_preview = view.preview_tank_id != target.id;
+        let changed_combat = owned && selected_tank.0.0 != target.id;
+        if changed_preview || changed_combat {
+            view.preview_tank_id = target.id.clone();
+            if owned {
+                selected_tank.0 = TankId(target.id.clone());
+            }
+            view.notice = None;
+            ui_dirty = true;
+            clicked = true;
+        }
+    }
+
+    if let Some(choice) = new_map_choice {
+        let next_map_id = if choice == 0 {
+            RANDOM_MAP_ID.to_string()
+        } else {
+            maps[choice - 1].id.clone()
+        };
+        if next_map_id != selected_map.0 {
+            selected_map.0 = next_map_id;
+            clicked = true;
+        }
+    }
+    if toggle_tree {
+        view.show_tech_tree = !view.show_tech_tree;
+        ui_dirty = true;
+        view.suppress_click_frames = 2;
         clicked = true;
     }
     if toggle_mode {
@@ -1661,7 +2896,12 @@ pub fn update_hangar(
             clicked = true;
         }
     }
+
     if start {
+        let latest_prog = prog_pair.0.as_deref().unwrap_or(&default_prog);
+        if !is_owned(latest_prog, &selected_tank.0.0) {
+            selected_tank.0 = TankId("ms_1".into());
+        }
         if let Some(ref mut msgs) = audio_pair.1 {
             msgs.write(UiSoundMessage(SoundPreset::BattleStart));
         }
@@ -1672,14 +2912,15 @@ pub fn update_hangar(
         msgs.write(UiSoundMessage(SoundPreset::UiClick));
     }
 
-    // Орбита камеры мышью.
-    let dragging = mouse_btn.pressed(MouseButton::Right)
-        || (mouse_btn.pressed(MouseButton::Left) && !ui_hovered);
+    // Орбита камеры мышью (отключена поверх UI и внутри окна дерева исследований).
+    let dragging = !view.show_tech_tree
+        && (mouse_btn.pressed(MouseButton::Right)
+            || (mouse_btn.pressed(MouseButton::Left) && !ui_hovered));
     if dragging && motion.delta != Vec2::ZERO {
         view.yaw -= motion.delta.x * 0.008;
         view.pitch = (view.pitch + motion.delta.y * 0.007).clamp(0.06, 1.12);
     }
-    if scroll.delta.y.abs() > 0.0 {
+    if !view.show_tech_tree && scroll.delta.y.abs() > 0.0 {
         view.distance = (view.distance - scroll.delta.y * 0.65).clamp(5.4, 14.5);
     }
     for mut cam_tf in &mut scene_q.p3() {
@@ -1687,56 +2928,151 @@ pub fn update_hangar(
         *cam_tf = Transform::from_translation(pos).looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y);
     }
 
-    let active_idx = tanks
-        .iter()
-        .position(|t| t.id == selected_tank.0.0)
-        .unwrap_or(0);
-    let spec = tanks
-        .get(active_idx)
-        .cloned()
-        .unwrap_or_else(|| load_tank_spec("t34_85").expect("t34_85"));
-    let meta = tank_wot_meta(&spec);
-    let ratings = compute_tank_ratings(&spec);
+    let latest_prog = prog_pair.0.as_deref().unwrap_or(&default_prog);
+    let combat_spec = owned_combat_spec(&selected_tank, latest_prog);
+    let preview_spec = load_tank_spec(&view.preview_tank_id).unwrap_or_else(|| combat_spec.clone());
+    let meta = tank_wot_meta(&preview_spec);
+    let ratings = compute_tank_ratings(&preview_spec);
 
-    let active_map_idx = maps
-        .iter()
-        .position(|m| m.id == selected_map.0)
-        .unwrap_or(0);
-    let map_spec = maps
-        .get(active_map_idx)
-        .cloned()
-        .or_else(|| load_map_spec("proving_grounds"))
-        .expect("default map");
+    let is_random_map = selected_map.0 == RANDOM_MAP_ID;
+    let active_map_idx = if is_random_map {
+        None
+    } else {
+        maps.iter().position(|m| m.id == selected_map.0).or(Some(0))
+    };
+    let (brief_title, brief_body, _) = map_brief_text(&selected_map.0, &maps, &all_tanks);
 
     let muted = audio_pair.0.as_ref().is_some_and(|a| a.muted);
     let wt_mode = *mode == DamageRulesMode::ModulesOnlyWt;
 
+    // Переспавн 3D-макета и X-Ray оверлея при смене осматриваемого танка.
+    if view.spawned_preview_id != preview_spec.id {
+        for (old, _) in &scene_q.p1() {
+            commands.entity(old).despawn();
+        }
+        for (old_x, _) in &scene_q.p2() {
+            commands.entity(old_x).despawn();
+        }
+        if let Some((tt_ent, _)) = scene_q.p0().iter().next() {
+            let new_prev = spawn_preview_tank(
+                &mut commands,
+                &mut assets_pair.0,
+                &assets_pair.2,
+                &preview_spec,
+            );
+            if view.xray_armor {
+                commands.entity(new_prev).insert(Visibility::Hidden);
+            }
+            let new_xray = spawn_xray_overlay(
+                &mut commands,
+                &mut assets_pair.0,
+                &mut assets_pair.1,
+                &preview_spec,
+                view.xray_armor,
+            );
+            commands.entity(tt_ent).add_children(&[new_prev, new_xray]);
+            view.spawned_preview_id = preview_spec.id.clone();
+        }
+    } else {
+        for (_, mut vis) in &mut scene_q.p1() {
+            *vis = if view.xray_armor {
+                Visibility::Hidden
+            } else {
+                Visibility::Visible
+            };
+        }
+        for (_, mut vis) in &mut scene_q.p2() {
+            *vis = if view.xray_armor {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
+        }
+    }
+
+    for (_, mut tf) in &mut scene_q.p0() {
+        if view.auto_spin && !dragging {
+            tf.rotate_y(time.delta_secs() * 0.30);
+        }
+    }
+
+    if ui_dirty {
+        for old_ui in &ui_roots {
+            commands.entity(old_ui).despawn();
+        }
+        let default_last = LastBattleReward::default();
+        let last_reward = prog_pair.1.as_deref().unwrap_or(&default_last);
+        spawn_hangar_ui(
+            &mut commands,
+            &all_tanks,
+            &maps,
+            &selected_tank,
+            &selected_map,
+            *mode,
+            &view,
+            latest_prog,
+            last_reward,
+            &preview_spec,
+            muted,
+        );
+        view.suppress_click_frames = view.suppress_click_frames.max(1);
+        return;
+    }
+
     // Подсветка кнопок карусели, меню и верхней панели.
     for (btn, interaction, mut bg, mut border) in &mut btns {
         match *btn {
-            HangarButton::SelectTank(i) => {
-                let active = i == active_idx;
-                let nation_accent = tanks
-                    .get(i)
-                    .map(|t| tank_wot_meta(t).accent)
-                    .unwrap_or(Color::srgb(0.45, 0.50, 0.56));
-                *bg = if active {
-                    BackgroundColor(Color::srgba(0.20, 0.24, 0.14, 0.96))
+            HangarButton::SelectTank(g_idx) => {
+                if let Some(t) = all_tanks.get(g_idx) {
+                    let owned = is_owned(latest_prog, &t.id);
+                    let researched = is_researched(latest_prog, &t.id);
+                    let is_combat = t.id == combat_spec.id;
+                    let is_preview = t.id == preview_spec.id;
+                    let nation_accent = tank_wot_meta(t).accent;
+                    *bg = if is_combat && is_preview {
+                        BackgroundColor(Color::srgba(0.20, 0.24, 0.14, 0.96))
+                    } else if is_preview {
+                        BackgroundColor(Color::srgba(0.14, 0.20, 0.28, 0.96))
+                    } else if *interaction == Interaction::Hovered {
+                        BackgroundColor(Color::srgba(0.13, 0.17, 0.22, 0.94))
+                    } else if owned {
+                        BackgroundColor(Color::srgba(0.07, 0.10, 0.12, 0.92))
+                    } else if researched {
+                        BackgroundColor(Color::srgba(0.13, 0.12, 0.08, 0.90))
+                    } else {
+                        BackgroundColor(Color::srgba(0.045, 0.055, 0.075, 0.85))
+                    };
+                    *border = BorderColor::all(if is_preview {
+                        Color::srgb(0.96, 0.64, 0.20)
+                    } else if is_combat {
+                        Color::srgb(0.42, 0.86, 0.44)
+                    } else if *interaction == Interaction::Hovered {
+                        Color::srgb(0.68, 0.74, 0.82)
+                    } else if owned {
+                        nation_accent
+                    } else if researched {
+                        Color::srgb(0.76, 0.62, 0.26)
+                    } else {
+                        Color::srgba(0.22, 0.26, 0.34, 0.8)
+                    });
+                }
+            }
+            HangarButton::SelectRandomMap => {
+                *bg = if is_random_map {
+                    BackgroundColor(Color::srgba(0.22, 0.18, 0.08, 0.94))
                 } else if *interaction == Interaction::Hovered {
-                    BackgroundColor(Color::srgba(0.13, 0.17, 0.22, 0.94))
+                    BackgroundColor(Color::srgba(0.12, 0.14, 0.18, 0.90))
                 } else {
-                    BackgroundColor(Color::srgba(0.07, 0.09, 0.12, 0.90))
+                    BackgroundColor(Color::srgba(0.06, 0.08, 0.11, 0.78))
                 };
-                *border = BorderColor::all(if active {
-                    Color::srgb(0.96, 0.64, 0.20)
-                } else if *interaction == Interaction::Hovered {
-                    Color::srgb(0.68, 0.74, 0.82)
+                *border = BorderColor::all(if is_random_map {
+                    Color::srgb(0.95, 0.76, 0.36)
                 } else {
-                    nation_accent
+                    Color::srgba(0.24, 0.30, 0.36, 0.75)
                 });
             }
             HangarButton::SelectMap(i) => {
-                let active = i == active_map_idx;
+                let active = active_map_idx == Some(i);
                 let accent = maps
                     .get(i)
                     .map(|m| biome_accent(m.biome))
@@ -1815,6 +3151,7 @@ pub fn update_hangar(
                     BackgroundColor(Color::srgb(0.84, 0.29, 0.10))
                 };
             }
+            _ => {}
         }
     }
 
@@ -1835,35 +3172,35 @@ pub fn update_hangar(
             HangarLabel::HeroTitle => {
                 txt.0 = format!(
                     "{} {} {}   {}   •   {}",
-                    meta.tier, meta.class_icon, meta.class_short, spec.name, meta.nation_short
+                    meta.tier,
+                    meta.class_icon,
+                    meta.class_short,
+                    preview_spec.name,
+                    meta.nation_short
                 );
             }
             HangarLabel::HeroSubtitle => {
                 txt.0 = format!(
                     "{} • SolidAP {:.0} мм • {:.0} HP",
                     meta.gun_short,
-                    penetration_at(&spec.shell, 100.0),
-                    spec.max_hp
+                    penetration_at(&preview_spec.shell, 100.0),
+                    preview_spec.max_hp
                 );
             }
             HangarLabel::HeaderStatus => {
-                txt.0 = format!("• Режим: {}", mode.ru_label());
+                txt.0 = format!("• {}", mode.ru_label());
             }
             HangarLabel::MapBriefTitle => {
-                txt.0 = format!("{}  •  {}", map_spec.name, biome_short_ru(map_spec.biome));
+                txt.0 = brief_title.clone();
             }
             HangarLabel::MapBriefBody => {
-                txt.0 = format!(
-                    "{}\n{}",
-                    map_spec.description,
-                    enemy_lineup_ru(&map_spec)
-                );
+                txt.0 = brief_body.clone();
             }
             HangarLabel::Info => {
-                txt.0 = format_hangar_ttx_compact(&spec);
+                txt.0 = format_hangar_ttx_compact(&preview_spec);
             }
             HangarLabel::ShellSlot => {
-                txt.0 = format!("[1] {:.0}мм SolidAP", spec.shell.caliber_mm);
+                txt.0 = format!("[1] {:.0}мм SolidAP", preview_spec.shell.caliber_mm);
             }
             HangarLabel::ToggleMode => {
                 txt.0 = format!("Режим [M]: {}", mode.ru_label());
@@ -1891,52 +3228,6 @@ pub fn update_hangar(
             }
         }
     }
-
-    // Переспавн 3D-макета и X-Ray оверлея при смене танка.
-    if selected_tank.is_changed() {
-        for (old, _) in &scene_q.p1() {
-            commands.entity(old).despawn();
-        }
-        for (old_x, _) in &scene_q.p2() {
-            commands.entity(old_x).despawn();
-        }
-        if let Some((tt_ent, _)) = scene_q.p0().iter().next() {
-            let new_prev =
-                spawn_preview_tank(&mut commands, &mut assets_pair.0, &assets_pair.2, &spec);
-            if view.xray_armor {
-                commands.entity(new_prev).insert(Visibility::Hidden);
-            }
-            let new_xray = spawn_xray_overlay(
-                &mut commands,
-                &mut assets_pair.0,
-                &mut assets_pair.1,
-                &spec,
-                view.xray_armor,
-            );
-            commands.entity(tt_ent).add_children(&[new_prev, new_xray]);
-        }
-    } else {
-        for (_, mut vis) in &mut scene_q.p1() {
-            *vis = if view.xray_armor {
-                Visibility::Hidden
-            } else {
-                Visibility::Visible
-            };
-        }
-        for (_, mut vis) in &mut scene_q.p2() {
-            *vis = if view.xray_armor {
-                Visibility::Visible
-            } else {
-                Visibility::Hidden
-            };
-        }
-    }
-
-    for (_, mut tf) in &mut scene_q.p0() {
-        if view.auto_spin && !dragging {
-            tf.rotate_y(time.delta_secs() * 0.30);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1944,9 +3235,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hangar_tank_ratings_and_meta_cover_all_five_vehicles() {
+    fn hangar_tank_ratings_and_meta_cover_all_fifteen_vehicles() {
         let tanks = available_tanks();
-        assert_eq!(tanks.len(), 5);
+        assert_eq!(tanks.len(), 15);
         for spec in &tanks {
             let r = compute_tank_ratings(spec);
             assert!((0.0..=1.0).contains(&r.firepower));
@@ -1957,6 +3248,14 @@ mod tests {
             let meta = tank_wot_meta(spec);
             assert!(!meta.tier.is_empty());
             assert!(!meta.gun_short.is_empty());
+        }
+
+        let prog = PlayerProgression::default();
+        let owned = filtered_carousel_indices(&tanks, &prog, HangarFilter::AllOwned);
+        assert_eq!(owned.len(), 3);
+        for nation in Nation::all() {
+            let branch = filtered_carousel_indices(&tanks, &prog, HangarFilter::Nation(nation));
+            assert_eq!(branch.len(), 5, "{nation:?} must have 5 tiers in carousel");
         }
     }
 }

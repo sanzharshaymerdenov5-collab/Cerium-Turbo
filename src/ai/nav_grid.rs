@@ -309,7 +309,7 @@ impl VoxelNavGrid {
             }
             closed[cur.idx] = true;
             iters += 1;
-            if iters > 25_000 {
+            if iters > 100_000 {
                 break;
             }
 

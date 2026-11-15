@@ -16,7 +16,7 @@ use std::f32::consts::{PI, TAU};
 use bevy::prelude::*;
 
 use crate::ballistics::{ArmorImpactMessage, TerrainImpactMessage, penetration::ImpactOutcome};
-use crate::core::{GameState, Team};
+use crate::core::GameState;
 use crate::damage::{TankActionKind, TankActionMessage, TankDestroyedMessage, TankModules};
 use crate::tank::{PlayerTank, TankCamera, TankCombat, TankFiredMessage, TankRoot, TankState};
 use crate::vfx::TurretLandedMessage;
@@ -332,8 +332,8 @@ fn handle_battle_audio(
             continue;
         }
         *variant = variant.wrapping_add(1);
-        let involves_player = msg.shooter_team == Some(Team::Player)
-            || (player_ent.is_some() && msg.owner_tank == player_ent);
+        let involves_player = player_ent.is_some()
+            && (msg.shooter == player_ent || msg.owner_tank == player_ent);
         let (spatial_g, pan) = compute_spatial_audio(listener_pos, listener_right, msg.hit_point, false);
         let gain = if involves_player {
             spatial_g.max(0.55)
@@ -972,6 +972,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::core::Team;
     use bevy::state::app::StatesPlugin;
     use bevy::time::TimeUpdateStrategy;
 

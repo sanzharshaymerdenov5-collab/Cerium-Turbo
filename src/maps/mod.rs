@@ -9,9 +9,10 @@ use bevy::prelude::*;
 
 use crate::ai::{AiBrain, VoxelNavGrid};
 use crate::ballistics::{ArmorPlate, HitLog, TargetInfo};
-use crate::core::{BattleStatus, GameState, SelectedMap, SelectedTank};
+use crate::core::{BattleSetupSet, BattleStatus, GameState, SelectedMap, SelectedTank, Team};
 use crate::damage::{DamageFeed, XRayHitReport};
-use crate::tank::{load_tank_spec, spawn_battle_camera, spawn_tank};
+use crate::tank::spawn::spawn_tank_with_team;
+use crate::tank::{load_tank_spec, spawn_battle_camera};
 use crate::voxel::{
     ChunkEntities, Material, VoxelAssets, VoxelGrid, VoxelWorld, spawn_world_chunks,
     voxel_model_bundle,
@@ -19,15 +20,39 @@ use crate::voxel::{
 pub use generate::{generate_map_grid, terrain_height_m};
 pub use spec::{
     CITY_RUINS_RON, DESERT_CANYON_RON, EnemySpawnSpec, FROZEN_FORT_RON, MapBiome, MapSpec,
-    PROVING_GROUNDS_RON, RAIL_YARD_RON, TargetSpec, available_maps, load_map_spec,
+    PROVING_GROUNDS_RON, RAIL_YARD_RON, RANDOM_MAP_ID, TargetSpec, available_maps, load_map_spec,
+    resolve_map_spec,
 };
+
+/// Итоговая карта текущего боя (с учётом режима выбора «Случайная»).
+#[derive(Resource, Debug, Clone)]
+pub struct ActiveBattleMap(pub MapSpec);
 
 pub struct MapPlugin;
 
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(GameState::InBattle), setup_battle_scene);
+        app.add_systems(
+            OnEnter(GameState::InBattle),
+            (
+                resolve_battle_map.in_set(BattleSetupSet::ResolveMap),
+                setup_battle_scene.in_set(BattleSetupSet::SpawnWorld),
+            ),
+        );
     }
+}
+
+fn resolve_battle_map(
+    mut commands: Commands,
+    selected_map: Res<SelectedMap>,
+    time: Res<Time>,
+    mut battle_counter: Local<u64>,
+) {
+    *battle_counter = battle_counter.wrapping_add(1);
+    let seed = (time.elapsed().as_nanos() as u64)
+        ^ battle_counter.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let map_spec = resolve_map_spec(&selected_map.0, seed);
+    commands.insert_resource(ActiveBattleMap(map_spec));
 }
 
 fn build_target_plate_grid(size_xy: (f32, f32)) -> VoxelGrid {
@@ -59,6 +84,7 @@ fn build_target_plate_grid(size_xy: (f32, f32)) -> VoxelGrid {
 #[allow(clippy::too_many_arguments)]
 fn setup_battle_scene(
     mut commands: Commands,
+    active_map: Option<Res<ActiveBattleMap>>,
     selected_map: Res<SelectedMap>,
     selected_tank: Res<SelectedTank>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -74,8 +100,9 @@ fn setup_battle_scene(
     *xray = XRayHitReport::default();
     *status = BattleStatus::Ongoing;
 
-    let map_spec = load_map_spec(&selected_map.0)
-        .unwrap_or_else(|| MapSpec::from_ron(PROVING_GROUNDS_RON).expect("default map"));
+    let map_spec = active_map
+        .map(|m| m.0.clone())
+        .unwrap_or_else(|| resolve_map_spec(&selected_map.0, 1));
     let grid = generate_map_grid(&map_spec);
     let nav_grid = VoxelNavGrid::from_grid(&grid, VoxelNavGrid::DEFAULT_CELL_M);
     let world = VoxelWorld::new(grid);
@@ -144,14 +171,16 @@ fn setup_battle_scene(
         .unwrap_or(map_spec.base_height_m)
         + 0.35;
     let spawn_pos = Vec3::new(map_spec.spawn_xz.0, spawn_y, map_spec.spawn_xz.1);
-    spawn_tank(
+    spawn_tank_with_team(
         &mut commands,
         &mut meshes,
         &assets,
-        tank_spec,
+        &tank_spec,
         spawn_pos,
         map_spec.spawn_yaw_deg.to_radians(),
+        Team::Player,
         true,
+        0,
     );
     spawn_battle_camera(&mut commands);
 
@@ -169,6 +198,42 @@ fn setup_battle_scene(
         })
         .collect();
 
+    // Союзные ИИ-танки (Team::Player, без PlayerTank).
+    for (idx, als) in map_spec.ally_spawns.iter().enumerate() {
+        let a_spec = als
+            .tank_id
+            .as_deref()
+            .and_then(load_tank_spec)
+            .unwrap_or_else(|| load_tank_spec("t34_85").expect("t34_85"));
+        let ay = world
+            .grid
+            .surface_height_at(als.pos_xz.0, als.pos_xz.1)
+            .unwrap_or(map_spec.base_height_m)
+            + 0.35;
+        let apos = Vec3::new(als.pos_xz.0, ay, als.pos_xz.1);
+        let ally_ent = spawn_tank_with_team(
+            &mut commands,
+            &mut meshes,
+            &assets,
+            &a_spec,
+            apos,
+            als.yaw_deg.to_radians(),
+            Team::Player,
+            false,
+            (idx as u64) + 1,
+        );
+        let mut bot_wps = waypoints.clone();
+        if !bot_wps.is_empty() {
+            let rot_by = idx % bot_wps.len();
+            bot_wps.rotate_left(rot_by);
+        }
+        commands.entity(ally_ent).insert(AiBrain::new(
+            bot_wps,
+            9001 + (idx as u64 + 1) * 131,
+            apos,
+        ));
+    }
+
     // Вражеские ИИ-танки.
     for (idx, es) in map_spec.enemy_spawns.iter().enumerate() {
         let e_spec = es
@@ -182,23 +247,27 @@ fn setup_battle_scene(
             .unwrap_or(map_spec.base_height_m)
             + 0.35;
         let epos = Vec3::new(es.pos_xz.0, ey, es.pos_xz.1);
-        let enemy_ent = spawn_tank(
+        let enemy_ent = spawn_tank_with_team(
             &mut commands,
             &mut meshes,
             &assets,
-            e_spec,
+            &e_spec,
             epos,
             es.yaw_deg.to_radians(),
+            Team::Enemy,
             false,
+            (idx as u64) + 10,
         );
         let mut bot_wps = waypoints.clone();
         if !bot_wps.is_empty() {
             let rot_by = idx % bot_wps.len();
             bot_wps.rotate_left(rot_by);
         }
-        commands
-            .entity(enemy_ent)
-            .insert(AiBrain::new(bot_wps, (idx as u64 + 1) * 101, epos));
+        commands.entity(enemy_ent).insert(AiBrain::new(
+            bot_wps,
+            9001 + (idx as u64 + 10) * 131,
+            epos,
+        ));
     }
 
     commands.insert_resource(nav_grid);
@@ -210,10 +279,33 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::ai::has_line_of_sight;
     use crate::tank::TankState;
     use crate::tank::controller::tank_suspension_and_drive;
     use bevy::state::app::StatesPlugin;
     use bevy::time::TimeUpdateStrategy;
+
+    #[test]
+    fn resolve_map_spec_random_selects_valid_maps_across_seeds() {
+        let valid_ids: Vec<String> = available_maps().into_iter().map(|m| m.id).collect();
+        let mut seen = std::collections::HashSet::new();
+        for seed in 0..16u64 {
+            let m = resolve_map_spec(RANDOM_MAP_ID, seed);
+            assert!(
+                valid_ids.contains(&m.id),
+                "некорректный id случайной карты: {}",
+                m.id
+            );
+            seen.insert(m.id);
+        }
+        assert!(
+            seen.len() >= 2,
+            "случайный выбор карты должен давать разные локации: {seen:?}"
+        );
+        assert_eq!(resolve_map_spec("city_ruins", 5).id, "city_ruins");
+    }
+
+    use crate::tank::spawn::spawn_tank;
 
     #[test]
     fn all_five_maps_enemy_spawns_are_reachable_on_nav_grid() {
@@ -223,7 +315,19 @@ mod tests {
             let grid = generate_map_grid(&spec);
             let nav = VoxelNavGrid::from_grid(&grid, VoxelNavGrid::DEFAULT_CELL_M);
             let p = Vec3::new(spec.spawn_xz.0, spec.base_height_m, spec.spawn_xz.1);
-            assert!(!spec.enemy_spawns.is_empty(), "карта {} без врагов", spec.id);
+            assert_eq!(spec.ally_spawns.len(), 4, "карта {} без 4 союзников", spec.id);
+            assert_eq!(spec.enemy_spawns.len(), 5, "карта {} без 5 врагов", spec.id);
+            for als in &spec.ally_spawns {
+                let ap = Vec3::new(als.pos_xz.0, spec.base_height_m, als.pos_xz.1);
+                let path = nav.find_path(p, ap);
+                assert!(
+                    !path.is_empty(),
+                    "на карте {} спавн союзника {:?} должен быть достижим от игрока {:?}",
+                    spec.id,
+                    als.pos_xz,
+                    spec.spawn_xz
+                );
+            }
             for es in &spec.enemy_spawns {
                 let ep = Vec3::new(es.pos_xz.0, spec.base_height_m, es.pos_xz.1);
                 let path = nav.find_path(p, ep);
@@ -234,6 +338,56 @@ mod tests {
                     es.pos_xz,
                     spec.spawn_xz
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn all_five_maps_5v5_spawns_budget_and_zero_spawn_los() {
+        let maps = available_maps();
+        assert_eq!(maps.len(), 5);
+        for spec in maps {
+            assert_eq!(spec.ally_spawns.len(), 4, "карта {} без 4 союзников", spec.id);
+            assert_eq!(spec.enemy_spawns.len(), 5, "карта {} без 5 врагов", spec.id);
+            assert!(
+                spec.dims.1 <= 36,
+                "высота сетки {} превышает 36: {}",
+                spec.id,
+                spec.dims.1
+            );
+            let total_voxels =
+                (spec.dims.0 as usize) * (spec.dims.1 as usize) * (spec.dims.2 as usize);
+            assert!(
+                total_voxels <= 3_200_000,
+                "бюджет вокселей {} превышен: {}",
+                spec.id,
+                total_voxels
+            );
+
+            let grid = generate_map_grid(&spec);
+            let nav = VoxelNavGrid::from_grid(&grid, VoxelNavGrid::DEFAULT_CELL_M);
+
+            let mut friend_pts = vec![spec.spawn_xz];
+            friend_pts.extend(spec.ally_spawns.iter().map(|s| s.pos_xz));
+            let enemy_pts: Vec<(f32, f32)> = spec.enemy_spawns.iter().map(|s| s.pos_xz).collect();
+
+            for &(fx, fz) in &friend_pts {
+                let fh = grid.surface_height_at(fx, fz).unwrap_or(spec.base_height_m);
+                let fpos = Vec3::new(fx, fh + 0.35, fz);
+                for &(ex, ez) in &enemy_pts {
+                    let eh = grid.surface_height_at(ex, ez).unwrap_or(spec.base_height_m);
+                    let epos = Vec3::new(ex, eh + 0.35, ez);
+                    assert!(
+                        !has_line_of_sight(&grid, fpos + Vec3::Y * 2.2, epos + Vec3::Y * 2.2),
+                        "на карте {} открыта прямая видимость между ({fx},{fz}) и ({ex},{ez})",
+                        spec.id
+                    );
+                    assert!(
+                        !nav.find_path(fpos, epos).is_empty(),
+                        "на карте {} нет A*-пути между ({fx},{fz}) и ({ex},{ez})",
+                        spec.id
+                    );
+                }
             }
         }
     }

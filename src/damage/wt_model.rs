@@ -69,6 +69,7 @@ pub fn handle_wt_modules_impacts(
     mut commands: Commands,
     mode: Res<DamageRulesMode>,
     mut impacts: MessageReader<ArmorImpactMessage>,
+    player_q: Query<Entity, With<PlayerTank>>,
     mut tanks: Query<(
         &GlobalTransform,
         Option<&TankRoot>,
@@ -90,6 +91,8 @@ pub fn handle_wt_modules_impacts(
         return;
     }
 
+    let human_ent = player_q.single().ok();
+
     for msg in impacts.read() {
         let Some(tank_ent) = msg.owner_tank else {
             continue;
@@ -104,7 +107,14 @@ pub fn handle_wt_modules_impacts(
         }
         let was_burning = modules.fire_timer > 0.0;
 
-        let record_xray = msg.shooter_team == Some(Team::Player) || msg.shooter.is_none();
+        let is_human_shooter = match (human_ent, msg.shooter) {
+            (Some(p), Some(s)) => p == s,
+            (None, None) => msg.shooter_team == Some(Team::Player),
+            _ => false,
+        };
+        let is_human_victim =
+            player_opt.is_some() || (human_ent.is_none() && combat.team == Team::Player);
+        let record_xray = is_human_shooter || (human_ent.is_none() && msg.shooter.is_none());
         let zone_ru = msg.zone.map_or("Броня", |z| z.ru_name()).to_string();
         let inv_hull = hull_gt.affine().inverse();
         let local_entry = inv_hull.transform_point3(msg.hit_point);
@@ -123,7 +133,7 @@ pub fn handle_wt_modules_impacts(
 
         match msg.outcome {
             ImpactOutcome::Ricochet => {
-                if msg.shooter_team == Some(Team::Player) {
+                if is_human_shooter {
                     feed.push(format!("{} — РИКОШЕТ", combat.tank_name), false);
                 }
                 if record_xray {
@@ -151,7 +161,7 @@ pub fn handle_wt_modules_impacts(
                 continue;
             }
             ImpactOutcome::NoPenetration { effective_mm } => {
-                if msg.shooter_team == Some(Team::Player) {
+                if is_human_shooter {
                     feed.push(
                         format!("{} — НЕ ПРОБИЛ ({effective_mm:.0}мм)", combat.tank_name),
                         false,
@@ -257,7 +267,7 @@ pub fn handle_wt_modules_impacts(
                             && (next == ModuleState::Destroyed || rng.f32() < 0.50)
                         {
                             modules.fire_timer = 7.0;
-                            if combat.team == Team::Player {
+                            if is_human_victim {
                                 feed.push("ПОЖАР БАКОВ! Нажмите [6] Огнетушитель", true);
                             }
                         }
@@ -377,12 +387,13 @@ pub fn handle_wt_modules_impacts(
                         pos: hull_gt.translation(),
                         team: combat.team,
                         ammo_detonated,
+                        killer: msg.shooter,
                     });
                     log.push(
                         HitKind::Penetration,
                         format!("{reason}: {} (WT, {})", combat.tank_name, zone_ru),
                     );
-                    if msg.shooter_team == Some(Team::Player) || combat.team == Team::Player {
+                    if is_human_shooter || is_human_victim {
                         feed.push(format!("{reason}: {}!", combat.tank_name), true);
                     }
                 } else {
@@ -402,12 +413,12 @@ pub fn handle_wt_modules_impacts(
                     } else {
                         tags.join(", ")
                     };
-                    if msg.shooter_team == Some(Team::Player) {
+                    if is_human_shooter {
                         feed.push(
                             format!("{} [{}]: {}", combat.tank_name, zone_ru, summary),
                             !tags.is_empty(),
                         );
-                    } else if combat.team == Team::Player && !tags.is_empty() {
+                    } else if is_human_victim && !tags.is_empty() {
                         feed.push(format!("Выбито: {summary}"), true);
                     }
                 }
@@ -446,6 +457,7 @@ pub fn tick_wt_crew_and_fire(
     time: Res<Time>,
     mode: Res<DamageRulesMode>,
     mut report: ResMut<XRayHitReport>,
+    player_q: Query<Entity, With<PlayerTank>>,
     mut tanks: Query<(
         Entity,
         &GlobalTransform,
@@ -475,6 +487,8 @@ pub fn tick_wt_crew_and_fire(
     if *mode != DamageRulesMode::ModulesOnlyWt {
         return;
     }
+
+    let human_ent = player_q.single().ok();
 
     for (tank_ent, gt, modules, mut crew, mut combat, is_player) in &mut tanks {
         if !combat.alive {
@@ -540,6 +554,7 @@ pub fn tick_wt_crew_and_fire(
                 pos: gt.translation(),
                 team: combat.team,
                 ammo_detonated: false,
+                killer: None,
             });
             let msg = if burned_out || modules.fire_timer > 0.0 {
                 format!("{} сгорел от пожара (WT)!", combat.tank_name)
@@ -547,7 +562,9 @@ pub fn tick_wt_crew_and_fire(
                 format!("{} — экипаж выведен из строя!", combat.tank_name)
             };
             log.push(HitKind::Penetration, msg.clone());
-            feed.push(msg, true);
+            if is_player.is_some() || human_ent.is_none() {
+                feed.push(msg, true);
+            }
             continue;
         }
 
@@ -727,5 +744,101 @@ mod tests {
         assert_eq!(crew_after.alive_count(), 1);
         assert!(!c.alive);
         assert_eq!(h.hp, spec.max_hp);
+    }
+
+    #[test]
+    fn wt_xray_and_feed_ignore_ally_ai_shots() {
+        let mut app = build_wt_test_app();
+        let spec = load_tank_spec("t34_85").unwrap();
+        let human = app
+            .world_mut()
+            .spawn((
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+                TankHealth::new(spec.max_hp),
+                TankModules::for_spec(&spec),
+                TankCrew::for_spec(&spec),
+                TankCombat::new(Team::Player, spec.name.clone()),
+                PlayerTank,
+            ))
+            .id();
+        let ally_ai = app
+            .world_mut()
+            .spawn((
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+                TankHealth::new(spec.max_hp),
+                TankModules::for_spec(&spec),
+                TankCrew::for_spec(&spec),
+                TankCombat::new(Team::Player, "Союзник".into()),
+            ))
+            .id();
+        let enemy = app
+            .world_mut()
+            .spawn((
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+                TankHealth::new(spec.max_hp),
+                TankModules::for_spec(&spec),
+                TankCrew::for_spec(&spec),
+                TankCombat::new(Team::Enemy, "Враг".into()),
+            ))
+            .id();
+        app.update();
+
+        // Союзный ИИ пробивает кормовой МТО (не смертельно) -> ни XRayHitReport, ни DamageFeed не обновляются.
+        app.world_mut().write_message(ArmorImpactMessage {
+            plate_entity: enemy,
+            owner_tank: Some(enemy),
+            zone: Some(ArmorZone::HullSideRight),
+            target_name: "Враг (борт МТО)".into(),
+            shooter: Some(ally_ai),
+            shooter_team: Some(Team::Player),
+            hit_point: Vec3::new(1.1, 0.72, 1.9),
+            hit_normal: Vec3::X,
+            ray_dir: Vec3::NEG_X,
+            dist_m: 100.0,
+            angle_deg: 0.0,
+            armor_thickness_mm: 40.0,
+            shell: spec.shell,
+            outcome: ImpactOutcome::Penetration { effective_mm: 40.0 },
+        });
+        app.update();
+        assert!(!app.world().resource::<XRayHitReport>().active);
+        assert!(app.world().resource::<DamageFeed>().items.is_empty());
+        assert!(
+            app.world().get::<TankCombat>(enemy).unwrap().alive,
+            "враг должен остаться жив после нелетального попадания союзного ИИ"
+        );
+
+        // Игрок бьёт в боеукладку -> XRayHitReport активен, DamageFeed заполнен, killer == Some(human).
+        let mut reader = app
+            .world_mut()
+            .resource::<Messages<TankDestroyedMessage>>()
+            .get_cursor();
+        app.world_mut().write_message(ArmorImpactMessage {
+            plate_entity: enemy,
+            owner_tank: Some(enemy),
+            zone: Some(ArmorZone::HullSideLeft),
+            target_name: "Враг (борт)".into(),
+            shooter: Some(human),
+            shooter_team: Some(Team::Player),
+            hit_point: Vec3::new(-1.3, 0.68, -0.45),
+            hit_normal: Vec3::NEG_X,
+            ray_dir: Vec3::X,
+            dist_m: 100.0,
+            angle_deg: 0.0,
+            armor_thickness_mm: 45.0,
+            shell: spec.shell,
+            outcome: ImpactOutcome::Penetration { effective_mm: 45.0 },
+        });
+        app.update();
+
+        assert!(app.world().resource::<XRayHitReport>().active);
+        assert!(!app.world().resource::<DamageFeed>().items.is_empty());
+        let msgs = app.world().resource::<Messages<TankDestroyedMessage>>();
+        let killed: Vec<_> = reader.read(msgs).collect();
+        assert_eq!(killed.len(), 1);
+        assert_eq!(killed[0].killer, Some(human));
     }
 }

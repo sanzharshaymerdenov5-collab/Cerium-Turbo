@@ -154,14 +154,15 @@ pub fn build_tank_parts_for_team(p: &ProceduralTankProfile, team: Team) -> TankV
     );
 
     let b_half_x = if p.turret_shape == TurretShape::BoxHeavy {
-        0.78
+        (p.turret_radius_x * 0.70).max(0.36)
     } else {
-        0.46
+        (p.turret_radius_x * 0.48).max(0.28)
     };
+    let b_half_y = (p.turret_height * 0.36).max(0.22);
     let barrel = build_symmetric_grid(
         b_half_x,
-        (-0.30, 0.30),
-        (-p.barrel_length - 0.04, 0.36),
+        (-b_half_y, b_half_y),
+        (-p.barrel_length - 0.04, 0.38),
         p.gun_voxel_size,
         true,
         |pt| ctx.sample_barrel(pt),
@@ -214,6 +215,7 @@ struct TankBuildCtx<'a> {
     hl: f32,
     hw: f32,
     inner_w: f32,
+    clearance: f32,
     fender_y0: f32,
     fender_y1: f32,
     gear: GearSpec,
@@ -225,6 +227,7 @@ impl<'a> TankBuildCtx<'a> {
         let hl = p.hull_length * 0.5;
         let hw = p.hull_width * 0.5;
         let inner_w = hw - p.track_width;
+        let clearance = (p.deck_height * 0.28).clamp(0.24, 0.34);
 
         // Верхняя ветвь гусеницы занимает верхний слой в пределах `track_height`,
         // а надгусеничная полка ложится строго на следующий слой вокселей.
@@ -235,15 +238,16 @@ impl<'a> TankBuildCtx<'a> {
         let fender_y1 = (top_row as f32 + 2.0) * vs - 0.005;
 
         let belt_h = y_track_top - y_track_bot;
-        let z_front = -(hl - 0.16);
-        let z_rear = hl - 0.18;
+        let z_front = -(hl - (0.16_f32).min(hl * 0.08));
+        let z_rear = hl - (0.18_f32).min(hl * 0.09);
 
         let gear = match p.hull_shape {
             HullShape::SlopedT34 | HullShape::Casemate => {
                 // 5 крупных катков Кристи без поддерживающих роликов; ведущее сзади.
+                let s = hl / 3.0;
                 let r_road = (belt_h - vs * 1.1) * 0.49;
                 let y_w = y_track_bot + vs * 0.5 + r_road;
-                let zs = [-2.02, -1.03, -0.04, 0.96, 1.98];
+                let zs = [-2.02, -1.03, -0.04, 0.96, 1.98].map(|z| z * s);
                 let road_wheels = zs
                     .into_iter()
                     .map(|z| RoadWheel {
@@ -255,8 +259,8 @@ impl<'a> TankBuildCtx<'a> {
                         spoked: true,
                     })
                     .collect();
-                let r_front = 0.24;
-                let r_rear = 0.26;
+                let r_front = (belt_h * 0.30).clamp(0.15, 0.25);
+                let r_rear = (belt_h * 0.325).clamp(0.16, 0.27);
                 GearSpec {
                     road_wheels,
                     rollers: Vec::new(),
@@ -269,15 +273,16 @@ impl<'a> TankBuildCtx<'a> {
                     r_rear,
                     y_track_bot,
                     y_track_top,
-                    z_bot_start: -2.08,
-                    z_bot_end: 2.04,
+                    z_bot_start: -2.08 * s,
+                    z_bot_end: 2.04 * s,
                 }
             }
             HullShape::LightBox => {
-                // M24 Chaffee: 5 компактных катков + 3 поддерживающих ролика; ведущее спереди.
-                let r_road = 0.22;
+                // M24 Chaffee и лёгкие танки: 5 компактных катков + 3 поддерживающих ролика; ведущее спереди.
+                let s = hl / 2.5;
+                let r_road = (belt_h * 0.305).clamp(0.14, 0.24);
                 let y_w = y_track_bot + vs * 0.5 + r_road;
-                let zs = [-1.62, -0.82, -0.02, 0.78, 1.58];
+                let zs = [-1.62, -0.82, -0.02, 0.78, 1.58].map(|z| z * s);
                 let road_wheels = zs
                     .into_iter()
                     .map(|z| RoadWheel {
@@ -289,14 +294,18 @@ impl<'a> TankBuildCtx<'a> {
                         spoked: false,
                     })
                     .collect();
-                let r_ret = 0.10;
+                let r_ret = (belt_h * 0.138).clamp(0.06, 0.11);
                 let y_ret = y_track_top - vs * 0.45 - r_ret;
                 let rollers = [-1.05, 0.0, 1.05]
                     .into_iter()
-                    .map(|z| ReturnRoller { z, y: y_ret, r: r_ret })
+                    .map(|z| ReturnRoller {
+                        z: z * s,
+                        y: y_ret,
+                        r: r_ret,
+                    })
                     .collect();
-                let r_front = 0.23;
-                let r_rear = 0.21;
+                let r_front = (belt_h * 0.32).clamp(0.15, 0.24);
+                let r_rear = (belt_h * 0.29).clamp(0.14, 0.22);
                 GearSpec {
                     road_wheels,
                     rollers,
@@ -309,60 +318,63 @@ impl<'a> TankBuildCtx<'a> {
                     r_rear,
                     y_track_bot,
                     y_track_top,
-                    z_bot_start: -1.68,
-                    z_bot_end: 1.64,
+                    z_bot_start: -1.68 * s,
+                    z_bot_end: 1.64 * s,
                 }
             }
             HullShape::HeavyBox => {
-                // Tiger I: 8 шахматных катков (4 внешних + 4 внутренних); ведущее спереди.
-                let r_road = 0.33;
+                // Tiger I / Pz III / Pz IV: 8 шахматных катков (4 внешних + 4 внутренних); ведущее спереди.
+                let s = hl / 3.15;
+                let tw = (hw - inner_w).max(0.24);
+                let r_road = (belt_h * 0.375).clamp(0.18, 0.33);
                 let y_w = y_track_bot + vs * 0.5 + r_road;
                 let mut road_wheels = Vec::with_capacity(8);
-                for z in [-1.72, -0.58, 0.56, 1.70] {
+                for z in [-1.72_f32, -0.58, 0.56, 1.70] {
                     road_wheels.push(RoadWheel {
-                        z,
+                        z: z * s,
                         y: y_w,
                         r: r_road,
-                        x_min: hw - 0.24,
+                        x_min: inner_w + tw * 0.65,
                         x_max: hw - 0.02,
                         spoked: false,
                     });
                 }
-                for z in [-1.15, -0.01, 1.13, 2.15] {
+                for z in [-1.15_f32, -0.01, 1.13, 2.15] {
                     road_wheels.push(RoadWheel {
-                        z,
+                        z: z * s,
                         y: y_w,
                         r: r_road,
                         x_min: inner_w + 0.04,
-                        x_max: hw - 0.28,
+                        x_max: inner_w + tw * 0.60,
                         spoked: false,
                     });
                 }
-                let r_front = 0.27;
-                let r_rear = 0.24;
+                let r_front = (belt_h * 0.307).clamp(0.16, 0.28);
+                let r_rear = (belt_h * 0.273).clamp(0.15, 0.25);
                 GearSpec {
                     road_wheels,
                     rollers: Vec::new(),
-                    z_front: -(hl - 0.20),
+                    z_front: -(hl - (0.20_f32).min(hl * 0.09)),
                     y_front: y_track_top - r_front - vs * 0.3,
                     r_front,
                     front_drive: true,
-                    z_rear: hl - 0.22,
+                    z_rear: hl - (0.22_f32).min(hl * 0.10),
                     y_rear: y_track_top - r_rear - vs * 0.3,
                     r_rear,
                     y_track_bot,
                     y_track_top,
-                    z_bot_start: -1.80,
-                    z_bot_end: 2.18,
+                    z_bot_start: -1.80 * s,
+                    z_bot_end: 2.18 * s,
                 }
             }
             HullShape::PikeNose => {
                 // ИС-3: 6 тяжёлых катков + 3 поддерживающих ролика; ведущее сзади.
-                let r_road = 0.24;
+                let s = hl / 3.3;
+                let r_road = (belt_h * 0.285).clamp(0.17, 0.25);
                 let y_w = y_track_bot + vs * 0.5 + r_road;
                 let road_wheels = (0..6)
                     .map(|i| {
-                        let z = -2.10 + i as f32 * 0.84;
+                        let z = (-2.10 + i as f32 * 0.84) * s;
                         RoadWheel {
                             z,
                             y: y_w,
@@ -373,28 +385,32 @@ impl<'a> TankBuildCtx<'a> {
                         }
                     })
                     .collect();
-                let r_ret = 0.105;
+                let r_ret = (belt_h * 0.125).clamp(0.07, 0.11);
                 let y_ret = y_track_top - vs * 0.45 - r_ret;
                 let rollers = [-1.35, 0.0, 1.35]
                     .into_iter()
-                    .map(|z| ReturnRoller { z, y: y_ret, r: r_ret })
+                    .map(|z| ReturnRoller {
+                        z: z * s,
+                        y: y_ret,
+                        r: r_ret,
+                    })
                     .collect();
-                let r_front = 0.24;
-                let r_rear = 0.26;
+                let r_front = (belt_h * 0.285).clamp(0.16, 0.25);
+                let r_rear = (belt_h * 0.31).clamp(0.17, 0.27);
                 GearSpec {
                     road_wheels,
                     rollers,
-                    z_front: -(hl - 0.18),
+                    z_front: -(hl - (0.18_f32).min(hl * 0.08)),
                     y_front: y_track_top - r_front - vs * 0.3,
                     r_front,
                     front_drive: false,
-                    z_rear: hl - 0.20,
+                    z_rear: hl - (0.20_f32).min(hl * 0.09),
                     y_rear: y_track_top - r_rear - vs * 0.3,
                     r_rear,
                     y_track_bot,
                     y_track_top,
-                    z_bot_start: -2.16,
-                    z_bot_end: 2.16,
+                    z_bot_start: -2.16 * s,
+                    z_bot_end: 2.16 * s,
                 }
             }
         };
@@ -406,6 +422,7 @@ impl<'a> TankBuildCtx<'a> {
             hl,
             hw,
             inner_w,
+            clearance,
             fender_y0,
             fender_y1,
             gear,
@@ -440,10 +457,15 @@ impl<'a> TankBuildCtx<'a> {
         let track_in = self.inner_w + 0.02;
         let track_out = self.hw;
 
-        // Оси балансиров: соединяют корпус с центрами катков (устраняет эффект «парящих» колёс).
-        if ax >= self.inner_w - 0.06 && ax <= track_out - 0.04 {
+        // Оси балансиров и бортовые передачи: соединяют корпус с центрами катков и ведущих/направляющих колёс.
+        if ax >= self.inner_w - vs * 1.15 && ax <= track_out - 0.04 {
             for w in &g.road_wheels {
-                if ax <= w.x_min + 0.05 && (pt.z - w.z).hypot(pt.y - w.y) <= 0.11 {
+                if ax <= w.x_min + 0.05
+                    && ((pt.z - w.z).hypot(pt.y - w.y) <= 0.11
+                        || ((pt.z - w.z).abs() <= vs * 0.85
+                            && pt.y >= w.y
+                            && pt.y <= self.clearance + vs * 0.85))
+                {
                     return Some(self.pal.dark);
                 }
             }
@@ -451,6 +473,12 @@ impl<'a> TankBuildCtx<'a> {
                 if ax <= track_out - 0.08 && (pt.z - r.z).hypot(pt.y - r.y) <= 0.075 {
                     return Some(self.pal.dark);
                 }
+            }
+            if ax <= self.inner_w + 0.08
+                && ((pt.z - g.z_front).hypot(pt.y - g.y_front) <= 0.09
+                    || (pt.z - g.z_rear).hypot(pt.y - g.y_rear) <= 0.09)
+            {
+                return Some(Material::TankSteel);
             }
         }
 
@@ -550,7 +578,7 @@ impl<'a> TankBuildCtx<'a> {
         };
 
         let d_belt = d_bot.min(d_top).min(d_ramp_f).min(d_ramp_r).min(d_arc_f).min(d_arc_r);
-        let half_t = vs * 0.68;
+        let half_t = vs * 0.72;
         if d_belt <= half_t {
             // Траки чередуются по шагу ~0.16 м для читаемого рельефа гусеницы.
             let shoe_idx = ((pt.z + pt.y * 0.8) / (vs * 2.0)).floor() as i32;
@@ -574,12 +602,13 @@ impl<'a> TankBuildCtx<'a> {
         if d <= r * 0.30 {
             return Some(Material::TankSteel);
         }
-        if is_sprocket && d >= r * 0.78 {
+        if is_sprocket && d >= r * 0.72 {
+            let tooth_x_in = (self.hw - 0.22).max(self.inner_w + 0.04);
             let sector = (v.y.atan2(v.x).rem_euclid(TAU / 6.0) / (TAU / 6.0)) * 2.0 - 1.0;
-            if sector.abs() < 0.46 && ax >= self.hw - 0.22 {
+            if sector.abs() < 0.46 && ax >= tooth_x_in {
                 return Some(Material::TankSteel);
             }
-            if d > r * 0.88 {
+            if d > r * 0.90 {
                 return None;
             }
         }
@@ -629,52 +658,62 @@ impl<'a> TankBuildCtx<'a> {
     }
 
     fn hull_front_z(&self, ax: f32, y: f32) -> f32 {
+        let dh = self.p.deck_height;
         match self.p.hull_shape {
             HullShape::SlopedT34 => {
-                if y >= 0.65 {
-                    -self.hl + (y - 0.65) * 1.15
+                let y_mid = dh * 0.565;
+                if y >= y_mid {
+                    -self.hl + (y - y_mid) * 1.15
                 } else {
-                    -self.hl + (0.65 - y) * 0.70
+                    -self.hl + (y_mid - y) * 0.70
                 }
             }
             HullShape::PikeNose => {
+                let y_mid = dh * 0.610;
                 let v = ax * 0.56;
-                if y >= 0.72 {
-                    -self.hl + v + (y - 0.72) * 1.05
+                if y >= y_mid {
+                    -self.hl + v + (y - y_mid) * 1.05
                 } else {
-                    -self.hl + v + (0.72 - y) * 0.70
+                    -self.hl + v + (y_mid - y) * 0.70
                 }
             }
             HullShape::Casemate => {
-                if y >= 0.65 {
-                    -self.hl + (y - 0.65) * 0.95
+                let y_mid = dh * 0.619;
+                if y >= y_mid {
+                    -self.hl + (y - y_mid) * 0.95
                 } else {
-                    -self.hl + (0.65 - y) * 0.65
+                    -self.hl + (y_mid - y) * 0.65
                 }
             }
             HullShape::LightBox => {
-                if y >= 0.65 {
-                    -self.hl + (y - 0.65) * 0.72
+                let y_mid = dh * 0.619;
+                if y >= y_mid {
+                    -self.hl + (y - y_mid) * 0.72
                 } else {
-                    -self.hl + (0.65 - y) * 0.42
+                    -self.hl + (y_mid - y) * 0.42
                 }
             }
             HullShape::HeavyBox => {
-                if y >= 0.96 {
+                let s = (self.hl / 3.15).clamp(0.65, 1.15);
+                let y_lo = dh * 0.580;
+                let y_hi = dh * 0.696;
+                let step_d = 0.12 * s;
+                let step_w = 0.32 * s;
+                if y >= y_hi {
                     // Вертикальная верхняя лобовая плита мехвода.
-                    -self.hl + 0.44 + (y - 0.96) * 0.14
-                } else if y >= 0.80 {
+                    -self.hl + step_d + step_w + (y - y_hi) * 0.14
+                } else if y >= y_lo {
                     // Пологий передний трансмиссионный уступ.
-                    -self.hl + 0.12 + ((y - 0.80) / 0.16) * 0.32
+                    -self.hl + step_d + ((y - y_lo) / (y_hi - y_lo).max(0.05)) * step_w
                 } else {
-                    -self.hl + 0.12 + (0.80 - y) * 0.72
+                    -self.hl + step_d + (y_lo - y) * 0.72
                 }
             }
         }
     }
 
     fn hull_rear_z(&self, y: f32) -> f32 {
-        let base_drop = (y - 0.34).max(0.0);
+        let base_drop = (y - self.clearance).max(0.0);
         match self.p.hull_shape {
             HullShape::HeavyBox => self.hl - base_drop * 0.08,
             _ => self.hl - base_drop * 0.25,
@@ -690,20 +729,25 @@ impl<'a> TankBuildCtx<'a> {
         if y <= self.fender_y1 {
             return self.inner_w;
         }
+        let tw = self.hw - self.inner_w;
         match self.p.hull_shape {
             HullShape::HeavyBox => self.hw - 0.04,
             HullShape::SlopedT34 | HullShape::Casemate => {
-                (self.hw - 0.08) * (1.0 - t) + (self.inner_w + 0.16) * t
+                (self.inner_w + tw * 0.84) * (1.0 - t) + (self.inner_w + tw * 0.32) * t
             }
-            HullShape::PikeNose => (self.hw - 0.06) * (1.0 - t) + (self.inner_w + 0.20) * t,
-            HullShape::LightBox => (self.hw - 0.12) * (1.0 - t) + (self.inner_w + 0.14) * t,
+            HullShape::PikeNose => {
+                (self.inner_w + tw * 0.90) * (1.0 - t) + (self.inner_w + tw * 0.345) * t
+            }
+            HullShape::LightBox => {
+                (self.inner_w + tw * 0.71) * (1.0 - t) + (self.inner_w + tw * 0.33) * t
+            }
         }
     }
 
     fn sample_hull_armor(&self, pt: Vec3, ax: f32) -> Option<Material> {
         let vs = self.p.voxel_size;
-        let clearance = 0.34;
-        if pt.y < clearance || pt.y > self.p.deck_height + 0.01 {
+        let dh = self.p.deck_height;
+        if pt.y < self.clearance || pt.y > dh + 0.01 {
             return None;
         }
 
@@ -719,10 +763,12 @@ impl<'a> TankBuildCtx<'a> {
         }
 
         // Рельефная решётка МТО на кормовой крыше (углублена на 1 воксель через чередование ребер).
-        if pt.y > self.p.deck_height - vs * 1.15 && pt.z > 0.65 && pt.z < rear_z - 0.18 && ax < self.inner_w * 0.72 {
+        let mto_z0 = self.hl * 0.22;
+        let mto_z1 = rear_z - (0.18_f32).min(self.hl * 0.08);
+        if pt.y > dh - vs * 1.15 && pt.z > mto_z0 && pt.z < mto_z1 && ax < self.inner_w * 0.72 {
             // Боковые круглые вентиляторы / крышки и поперечные жалюзи.
             let slat = (pt.z / (vs * 2.0)).floor() as i32;
-            if pt.y > self.p.deck_height - vs * 0.75 && slat % 2 == 0 && ax > 0.12 {
+            if pt.y > dh - vs * 0.75 && slat % 2 == 0 && ax > self.inner_w * 0.12 {
                 return None;
             }
             return Some(self.pal.dark);
@@ -732,25 +778,30 @@ impl<'a> TankBuildCtx<'a> {
         if matches!(self.p.hull_shape, HullShape::PikeNose)
             && ax < vs * 0.7
             && pt.z < front_z + vs * 1.4
-            && pt.y >= 0.70
+            && pt.y >= dh * 0.60
         {
             return Some(self.pal.armor_light);
         }
 
         // Смотровая щель мехвода и шаровая установка курсового пулемёта на ВЛД.
-        if pt.y >= 0.78 && pt.z < front_z + vs * 1.5 {
+        if pt.y >= dh * 0.68 && pt.z < front_z + vs * 1.5 {
             match self.p.hull_shape {
                 HullShape::SlopedT34 => {
                     // Люк мехвода слева с перископами.
-                    if (-0.62..=-0.14).contains(&pt.x) && (0.84..=1.06).contains(&pt.y) {
-                        if (0.96..=1.04).contains(&pt.y) && (pt.x + 0.38).abs() <= 0.16 {
+                    if (-self.inner_w * 0.62..=-self.inner_w * 0.14).contains(&pt.x)
+                        && (dh * 0.73..=dh * 0.92).contains(&pt.y)
+                    {
+                        if (dh * 0.835..=dh * 0.905).contains(&pt.y)
+                            && (pt.x + self.inner_w * 0.38).abs() <= self.inner_w * 0.16
+                        {
                             return Some(Material::TankLens);
                         }
                         return Some(self.pal.armor_light);
                     }
                 }
                 HullShape::HeavyBox
-                    if (1.12..=1.24).contains(&pt.y) && (-0.74..=-0.34).contains(&pt.x) =>
+                    if (dh * 0.81..=dh * 0.90).contains(&pt.y)
+                        && (-self.inner_w * 0.70..=-self.inner_w * 0.32).contains(&pt.x) =>
                 {
                     return Some(Material::TankLens);
                 }
@@ -761,19 +812,21 @@ impl<'a> TankBuildCtx<'a> {
         // Детализация верхней плиты корпуса (лючки, стык передней плиты).
         let is_hatch = match self.p.hull_shape {
             HullShape::LightBox | HullShape::HeavyBox => {
-                pt.y > self.p.deck_height - vs * 1.1
-                    && (-2.15..=-0.95).contains(&pt.z)
-                    && (0.25..=0.75).contains(&ax)
+                pt.y > dh - vs * 1.1
+                    && (-self.hl * 0.76..=-self.hl * 0.34).contains(&pt.z)
+                    && (self.inner_w * 0.25..=self.inner_w * 0.72).contains(&ax)
             }
             _ => false,
         };
 
         // Задний круглый люк трансмиссии (Т-34 / СУ-100).
+        let trans_y = dh * 0.66;
+        let trans_r = (self.inner_w * 0.30).clamp(0.18, 0.32);
         if matches!(self.p.hull_shape, HullShape::SlopedT34 | HullShape::Casemate)
             && pt.z > rear_z - vs * 1.3
-            && (pt.x).hypot(pt.y - 0.76) <= 0.30
+            && (pt.x).hypot(pt.y - trans_y) <= trans_r
         {
-            return Some(if (pt.x).hypot(pt.y - 0.76) > 0.22 {
+            return Some(if (pt.x).hypot(pt.y - trans_y) > trans_r * 0.73 {
                 self.pal.dark
             } else {
                 self.pal.armor_light
@@ -785,12 +838,13 @@ impl<'a> TankBuildCtx<'a> {
 
     fn hull_addons(&self, pt: Vec3, ax: f32) -> Option<Material> {
         let vs = self.p.voxel_size;
-        let front_at_hinge = self.hull_front_z(ax, 0.72);
+        let dh = self.p.deck_height;
+        let tw = self.hw - self.inner_w;
 
         // 1. Погон башни на крыше (для поворотных башен) — гарантирует плотную посадку без зазора.
         if self.p.turret_shape != TurretShape::FixedCasemate {
             let tp = Vec3::from_array(self.p.turret_pivot);
-            if pt.y >= self.p.deck_height - 0.04 && pt.y <= self.p.deck_height + 0.03 {
+            if pt.y >= dh - vs && pt.y <= dh + 0.03 {
                 let d = (pt.x - tp[0]).hypot(pt.z - tp[2]);
                 if d <= self.p.turret_radius_x * 0.94 && d >= self.p.turret_radius_x * 0.72 {
                     return Some(self.pal.dark);
@@ -799,24 +853,26 @@ impl<'a> TankBuildCtx<'a> {
         }
 
         // 2. Буксирные крюки на носу (передняя пара скоб).
+        let y_hook = dh * 0.58;
         if (ax - self.inner_w * 0.62).abs() <= vs * 0.6
-            && pt.y >= 0.56
-            && pt.y <= 0.72
-            && pt.z >= front_at_hinge - 0.14
-            && pt.z <= front_at_hinge + 0.04
+            && pt.y >= (y_hook - 0.12).max(self.clearance)
+            && pt.y <= y_hook + 0.04
         {
-            return Some(Material::TankSteel);
+            let fz = self.hull_front_z(ax, pt.y);
+            if pt.z >= fz - 0.12 && pt.z <= fz + 0.05 {
+                return Some(Material::TankSteel);
+            }
         }
 
         // 3. Запасные траки на нижней/средней части ВЛД (Т-34, СУ-100, Tiger I).
         if matches!(
             self.p.hull_shape,
             HullShape::SlopedT34 | HullShape::Casemate | HullShape::HeavyBox
-        ) && ax <= 0.52
+        ) && ax <= self.inner_w * 0.52
         {
             let rack_y = match self.p.hull_shape {
-                HullShape::HeavyBox => (0.80, 0.94),
-                _ => (0.64, 0.82),
+                HullShape::HeavyBox => (dh * 0.58, dh * 0.68),
+                _ => (dh * 0.56, dh * 0.71),
             };
             if pt.y >= rack_y.0 && pt.y <= rack_y.1 {
                 let fz = self.hull_front_z(ax, pt.y);
@@ -831,44 +887,61 @@ impl<'a> TankBuildCtx<'a> {
             }
         }
 
-        // 4. Курсовой пулемёт справа на носу (Т-34, Tiger I, M24).
+        // 4. Курсовой пулемёт справа на носу (Т-34, Tiger I, M24 и др.).
         if matches!(
             self.p.hull_shape,
             HullShape::SlopedT34 | HullShape::HeavyBox | HullShape::LightBox
         ) {
-            let mg_pos = match self.p.hull_shape {
-                HullShape::HeavyBox => Vec3::new(0.52, 1.18, -self.hl + 0.40),
-                HullShape::LightBox => Vec3::new(0.45, 0.88, -self.hl + 0.22),
-                _ => Vec3::new(0.44, 0.90, -self.hl + 0.26),
+            let mg_x = self.inner_w * 0.44;
+            let mg_y = match self.p.hull_shape {
+                HullShape::HeavyBox => dh * 0.855,
+                HullShape::LightBox => dh * 0.838,
+                _ => dh * 0.783,
             };
-            let radial = Vec2::new(pt.x - mg_pos.x, pt.y - mg_pos.y).length();
-            if radial <= 0.095 && pt.z >= mg_pos.z - 0.08 && pt.z <= mg_pos.z + 0.14 {
+            let mg_z = self.hull_front_z(mg_x, mg_y) - 0.02;
+            let barrel_len = (0.18_f32).min(self.hl * 0.09);
+            let radial = Vec2::new(pt.x - mg_x, pt.y - mg_y).length();
+            if radial <= 0.095 && pt.z >= mg_z - 0.08 && pt.z <= mg_z + 0.14 {
                 return Some(self.pal.dark);
             }
-            if radial <= 0.045 && pt.z >= mg_pos.z - 0.22 && pt.z <= mg_pos.z {
+            if radial <= (vs * 0.72).max(0.058) && pt.z >= mg_z - barrel_len && pt.z <= mg_z {
                 return Some(Material::TankSteel);
             }
         }
 
         // 5. Перископический колпак мехвода у ИС-3 в вершине «щучьего носа».
-        if self.p.hull_shape == HullShape::PikeNose
-            && ax <= 0.22
-            && pt.y >= self.p.deck_height
-            && pt.y <= self.p.deck_height + 0.12
-            && pt.z >= -self.hl + 0.72
-            && pt.z <= -self.hl + 1.06
-        {
-            if pt.z <= -self.hl + 0.82 && ax <= 0.16 {
-                return Some(Material::TankLens);
+        if self.p.hull_shape == HullShape::PikeNose {
+            let s = self.hl / 3.3;
+            if ax <= self.inner_w * 0.22
+                && pt.y >= dh - 0.02
+                && pt.y <= dh + 0.12
+                && pt.z >= -self.hl + 0.72 * s
+                && pt.z <= -self.hl + 1.06 * s
+            {
+                if pt.z <= -self.hl + 0.82 * s && ax <= self.inner_w * 0.16 {
+                    return Some(Material::TankLens);
+                }
+                return Some(self.pal.dark);
             }
-            return Some(self.pal.dark);
         }
 
         // 6. Фара слева спереди.
         let lamp_pos = match self.p.hull_shape {
-            HullShape::HeavyBox => Vec3::new(-(self.hw - 0.25), self.p.deck_height + 0.08, -self.hl + 0.56),
-            HullShape::PikeNose => Vec3::new(-0.56, self.p.deck_height + 0.04, -self.hl + 0.75),
-            _ => Vec3::new(-(self.inner_w + 0.16), self.fender_y1 + 0.07, -self.hl + 0.26),
+            HullShape::HeavyBox => Vec3::new(
+                -(self.inner_w + tw * 0.65),
+                dh + 0.06,
+                -self.hl + 0.56 * (self.hl / 3.15),
+            ),
+            HullShape::PikeNose => Vec3::new(
+                -self.inner_w * 0.54,
+                dh + 0.04,
+                -self.hl + 0.75 * (self.hl / 3.3),
+            ),
+            _ => Vec3::new(
+                -(self.inner_w + tw * 0.40),
+                self.fender_y1 + 0.07,
+                -self.hl + (0.26_f32).min(self.hl * 0.14),
+            ),
         };
         if (pt.x - lamp_pos.x).hypot(pt.y - lamp_pos.y) <= 0.085
             && pt.z >= lamp_pos.z - 0.10
@@ -881,19 +954,30 @@ impl<'a> TankBuildCtx<'a> {
             });
         }
 
-        // 7. Наружные топливные баки на бортах / корме (Т-34-85, СУ-100, ИС-3).
+        // 7. Наружные топливные баки на бортах / корме (Т-34-85, СУ-100, ИС-3 и др.).
         if matches!(
             self.p.hull_shape,
             HullShape::SlopedT34 | HullShape::Casemate | HullShape::PikeNose
         ) {
+            let drum_r = (tw * 0.36).clamp(0.11, 0.18);
             let (drum_x, drum_y, z0, z1) = match self.p.hull_shape {
-                HullShape::PikeNose => (self.hw - 0.18, self.p.deck_height + 0.06, 0.85, 2.75),
-                _ => (self.hw - 0.14, self.fender_y1 + 0.17, 1.05, 2.55),
+                HullShape::PikeNose => (
+                    self.inner_w + tw * 0.69,
+                    dh + drum_r - 0.12,
+                    self.hl * 0.26,
+                    self.hl * 0.83,
+                ),
+                _ => (
+                    self.inner_w + tw * 0.72,
+                    self.fender_y1 + drum_r - 0.01,
+                    self.hl * 0.35,
+                    self.hl * 0.85,
+                ),
             };
             if pt.z >= z0 && pt.z <= z1 {
                 let d = (ax - drum_x).hypot(pt.y - drum_y);
                 let in_gap = (pt.z - (z0 + z1) * 0.5).abs() < 0.07;
-                if !in_gap && d <= 0.18 {
+                if !in_gap && d <= drum_r {
                     let strap = ((pt.z - z0) % 0.42).abs() < 0.06;
                     return Some(if strap {
                         self.pal.dark
@@ -908,9 +992,9 @@ impl<'a> TankBuildCtx<'a> {
         if self.p.hull_shape == HullShape::Casemate
             && pt.x < -(self.inner_w + 0.04)
             && pt.x > -(self.hw - 0.04)
-            && pt.z >= -0.65
-            && pt.z <= 0.85
-            && (pt.y - (self.fender_y1 + 0.12)).abs() <= 0.10
+            && pt.z >= -self.hl * 0.22
+            && pt.z <= self.hl * 0.28
+            && (pt.y - (self.fender_y1 + 0.10)).abs() <= 0.10
         {
             return Some(Material::TankWood);
         }
@@ -919,22 +1003,25 @@ impl<'a> TankBuildCtx<'a> {
             && ax <= self.hw - 0.06
             && pt.y >= self.fender_y1
             && pt.y <= self.fender_y1 + 0.16
-            && pt.z >= -0.45
-            && pt.z <= 0.65
+            && pt.z >= -self.hl * 0.18
+            && pt.z <= self.hl * 0.26
         {
-            let strap = (pt.z.abs() < 0.05) || (pt.z + 0.40).abs() < 0.04;
+            let strap = (pt.z.abs() < 0.05) || (pt.z + self.hl * 0.16).abs() < 0.04;
             return Some(if strap { Material::TankWood } else { self.pal.dark });
         }
 
-        // 9. Выхлопные трубы на корме (у Tiger I — вертикальные глушители Фейфеля с кожухами).
+        // 9. Выхлопные трубы на корме (у HeavyBox — вертикальные глушители Фейфеля с кожухами).
         if self.p.hull_shape == HullShape::HeavyBox {
-            if (ax - 0.62).abs() <= 0.14
-                && pt.z >= self.hl - 0.10
+            let ex = self.inner_w * 0.58;
+            let ey0 = dh * 0.52;
+            let rz = self.hull_rear_z(pt.y.min(dh));
+            if (ax - ex).abs() <= 0.14
+                && pt.z >= rz - 0.04
                 && pt.z <= self.hl + 0.24
-                && pt.y >= 0.72
-                && pt.y <= self.p.deck_height + 0.24
+                && pt.y >= ey0
+                && pt.y <= dh + 0.24
             {
-                let inner = (ax - 0.62).abs() <= 0.06 && pt.y >= self.p.deck_height + 0.04;
+                let inner = (ax - ex).abs() <= 0.06 && pt.y >= dh + 0.04;
                 return Some(if inner {
                     Material::TankExhaust
                 } else {
@@ -942,8 +1029,10 @@ impl<'a> TankBuildCtx<'a> {
                 });
             }
         } else {
-            let rz = self.hull_rear_z(0.84);
-            if (ax - 0.54).hypot(pt.y - 0.84) <= 0.085 && pt.z >= rz - 0.04 && pt.z <= rz + 0.20 {
+            let ex = self.inner_w * 0.54;
+            let ey = dh * 0.72;
+            let rz = self.hull_rear_z(ey);
+            if (ax - ex).hypot(pt.y - ey) <= 0.085 && pt.z >= rz - 0.04 && pt.z <= rz + 0.20 {
                 return Some(Material::TankExhaust);
             }
         }
@@ -990,9 +1079,12 @@ impl<'a> TankBuildCtx<'a> {
             }
             TurretShape::FixedCasemate => {
                 let k = 1.0 - t * 0.22;
-                let front_slope = -rz + t * 0.58;
-                let right_blister =
-                    pt.x >= 0.25 && pt.x <= rx * 0.96 && pt.z >= -0.45 && pt.z <= 0.35 && t >= 0.45;
+                let front_slope = -rz + t * (rz * 0.46);
+                let right_blister = pt.x >= rx * 0.245
+                    && pt.x <= rx * 0.96
+                    && pt.z >= -rz * 0.36
+                    && pt.z <= rz * 0.28
+                    && t >= 0.45;
                 right_blister || (pt.x.abs() <= rx * k && pt.z >= front_slope && pt.z <= rz)
             }
             TurretShape::RoundedDome => {
@@ -1005,8 +1097,9 @@ impl<'a> TankBuildCtx<'a> {
             }
             TurretShape::CompactLight => {
                 let k = 1.0 - t * 0.15;
+                let bustle_ext = (rz * 0.22).clamp(0.12, 0.24);
                 let bustle = pt.z > rz * 0.30
-                    && pt.z <= rz + 0.22
+                    && pt.z <= rz + bustle_ext
                     && pt.x.abs() <= rx * 0.72
                     && pt.y >= th * 0.22;
                 let nx = pt.x / (rx * k);
@@ -1015,8 +1108,9 @@ impl<'a> TankBuildCtx<'a> {
             }
             TurretShape::HexCast => {
                 let k = 1.0 - t * 0.18;
+                let bustle_ext = (rz * 0.12).clamp(0.08, 0.16);
                 let bustle = pt.z > rz * 0.25
-                    && pt.z <= rz + 0.14
+                    && pt.z <= rz + bustle_ext
                     && pt.x.abs() <= rx * 0.70 * k
                     && pt.y >= th * 0.16;
                 let nx = pt.x / (rx * k);
@@ -1030,9 +1124,9 @@ impl<'a> TankBuildCtx<'a> {
 
         // Опознавательный знак на бортах башни/рубки (только внешний слой).
         let mark_z = if self.p.turret_shape == TurretShape::FixedCasemate {
-            0.20
+            rz * 0.16
         } else {
-            0.05
+            rz * 0.04
         };
         let min_mark_x = rx * 0.68;
         if pt.x.abs() > min_mark_x
@@ -1044,11 +1138,11 @@ impl<'a> TankBuildCtx<'a> {
         // Задняя дверь рубки у СУ-100.
         if self.p.turret_shape == TurretShape::FixedCasemate
             && pt.z > rz - vs * 1.2
-            && pt.x.abs() <= 0.32
+            && pt.x.abs() <= rx * 0.31
             && pt.y >= 0.08
             && pt.y <= th * 0.78
         {
-            let border = pt.x.abs() > 0.24 || pt.y > th * 0.70 || pt.y < 0.16;
+            let border = pt.x.abs() > rx * 0.235 || pt.y > th * 0.70 || pt.y < 0.16;
             return Some(if border {
                 self.pal.dark
             } else {
@@ -1071,11 +1165,27 @@ impl<'a> TankBuildCtx<'a> {
     ) -> Option<Material> {
         // Командирская башенка со смотровыми приборами.
         let (cup_pos, cup_r, cup_h) = match self.p.turret_shape {
-            TurretShape::FixedCasemate => (Vec2::new(0.54, -0.06), 0.26, 0.18),
-            TurretShape::BoxHeavy => (Vec2::new(-rx * 0.36, rz * 0.22), 0.34, 0.28),
-            TurretShape::RoundedDome => (Vec2::new(-rx * 0.34, rz * 0.14), 0.24, 0.09),
-            TurretShape::CompactLight => (Vec2::new(-rx * 0.32, rz * 0.18), 0.25, 0.15),
-            TurretShape::HexCast => (Vec2::new(-rx * 0.35, rz * 0.22), 0.28, 0.21),
+            TurretShape::FixedCasemate => (Vec2::new(rx * 0.53, -rz * 0.05), rx * 0.255, th * 0.25),
+            TurretShape::BoxHeavy => (
+                Vec2::new(-rx * 0.36, rz * 0.22),
+                (rx * 0.30).clamp(0.18, 0.34),
+                (th * 0.33).clamp(0.16, 0.28),
+            ),
+            TurretShape::RoundedDome => (
+                Vec2::new(-rx * 0.34, rz * 0.14),
+                (rx * 0.22).clamp(0.14, 0.24),
+                (th * 0.14).clamp(0.08, 0.12),
+            ),
+            TurretShape::CompactLight => (
+                Vec2::new(-rx * 0.32, rz * 0.18),
+                (rx * 0.30).clamp(0.14, 0.25),
+                (th * 0.23).clamp(0.12, 0.17),
+            ),
+            TurretShape::HexCast => (
+                Vec2::new(-rx * 0.35, rz * 0.22),
+                (rx * 0.295).clamp(0.16, 0.28),
+                (th * 0.28).clamp(0.14, 0.22),
+            ),
         };
         let d_cup = Vec2::new(pt.x - cup_pos.x, pt.z - cup_pos.y).length();
         if pt.y >= th - 0.02 && pt.y <= th + cup_h && d_cup <= cup_r {
@@ -1095,35 +1205,38 @@ impl<'a> TankBuildCtx<'a> {
 
         // Люк заряжающего справа.
         let load_x = if self.p.turret_shape == TurretShape::FixedCasemate {
-            -0.38
+            -rx * 0.37
         } else {
             rx * 0.34
         };
+        let load_r = (rx * 0.26).clamp(0.11, 0.23);
         let d_load = Vec2::new(pt.x - load_x, pt.z - rz * 0.14).length();
-        if pt.y >= th - 0.02 && pt.y <= th + 0.08 && d_load <= 0.23 {
-            return Some(if d_load > 0.16 {
+        if pt.y >= th - 0.02 && pt.y <= th + 0.08 && d_load <= load_r {
+            return Some(if d_load > load_r * 0.70 {
                 self.pal.dark
             } else {
                 self.pal.armor_light
             });
         }
 
-        // Грибки вентиляции на корме башни Т-34-85.
+        // Грибки вентиляции на корме башни Т-34-85 / HexCast.
         if self.p.turret_shape == TurretShape::HexCast && pt.y >= th - 0.01 && pt.y <= th + 0.09 {
-            for sx in [-0.26f32, 0.26] {
-                if (pt.x - sx).hypot(pt.z - rz * 0.56) <= 0.10 {
+            let vent_r = (rx * 0.105).clamp(0.06, 0.10);
+            for sx in [-rx * 0.27, rx * 0.27] {
+                if (pt.x - sx).hypot(pt.z - rz * 0.56) <= vent_r {
                     return Some(self.pal.dark);
                 }
             }
         }
 
-        // Кормовой ящик Rommelkiste, дымовые мортирки и запасные траки на башне Tiger I.
+        // Кормовой ящик Rommelkiste, дымовые мортирки и запасные траки на башне BoxHeavy.
         if self.p.turret_shape == TurretShape::BoxHeavy {
+            let kiste_ext = (rz * 0.26).clamp(0.18, 0.34);
             if pt.y >= 0.12
                 && pt.y <= th * 0.76
                 && pt.x.abs() <= rx * 0.68
                 && pt.z >= rz * 0.90
-                && pt.z <= rz + 0.34
+                && pt.z <= rz + kiste_ext
             {
                 let strap = (pt.x.abs() - rx * 0.42).abs() < 0.05 || pt.y > th * 0.68;
                 return Some(if strap {
@@ -1133,18 +1246,20 @@ impl<'a> TankBuildCtx<'a> {
                 });
             }
             // Бортовые мортирки 3+3 у передних скул башни.
+            let smoke_ext = (rx * 0.11).clamp(0.06, 0.12);
             if pt.y >= th * 0.45
                 && pt.y <= th * 0.68
                 && pt.x.abs() >= rx * 0.78
-                && pt.x.abs() <= rx + 0.12
+                && pt.x.abs() <= rx + smoke_ext
                 && pt.z >= -rz * 0.54
                 && pt.z <= -rz * 0.30
             {
                 return Some(Material::TankSteel);
             }
             // Запасные траки на бортах башни.
+            let spare_ext = (rx * 0.07).clamp(0.05, 0.08);
             if pt.x.abs() >= rx * 0.88
-                && pt.x.abs() <= rx + 0.08
+                && pt.x.abs() <= rx + spare_ext
                 && pt.y >= 0.14
                 && pt.y <= th * 0.82
                 && pt.z >= rz * 0.25
@@ -1159,22 +1274,25 @@ impl<'a> TankBuildCtx<'a> {
             }
         }
 
-        // Зенитный крупнокалиберный пулемёт на крыше M24 (.50 Browning) и ИС-3 (ДШК).
+        // Зенитный крупнокалиберный пулемёт на крыше CompactLight и RoundedDome.
         if matches!(
             self.p.turret_shape,
             TurretShape::CompactLight | TurretShape::RoundedDome
         ) {
-            let mount = Vec3::new(0.26, th, rz * 0.44);
-            let post = (pt.x - mount.x).hypot(pt.z - mount.z) <= 0.055
-                && pt.y >= th - 0.02
-                && pt.y <= th + 0.24;
+            let mount = Vec3::new(rx * 0.30, th, rz * 0.44);
+            let mg_h = (th * 0.36).clamp(0.16, 0.24);
+            let mg_len = (rz * 0.58).clamp(0.28, 0.62);
+            let min_r = (vs * 0.74).max(0.06);
+            let post = (pt.x - mount.x).hypot(pt.z - mount.z) <= min_r
+                && pt.y >= th - 0.04
+                && pt.y <= th + mg_h;
             let body = (pt.x - mount.x).abs() <= 0.075
-                && (pt.y - (th + 0.24)).abs() <= 0.065
-                && pt.z >= mount.z - 0.16
-                && pt.z <= mount.z + 0.18;
-            let barrel = (pt.x - mount.x).hypot(pt.y - (th + 0.25)) <= 0.042
-                && pt.z >= mount.z - 0.62
-                && pt.z <= mount.z - 0.12;
+                && (pt.y - (th + mg_h)).abs() <= 0.065
+                && pt.z >= mount.z - 0.14
+                && pt.z <= mount.z + 0.16;
+            let barrel = (pt.x - mount.x).hypot(pt.y - (th + mg_h)) <= min_r
+                && pt.z >= mount.z - mg_len
+                && pt.z <= mount.z - 0.10;
             if post || body || barrel {
                 return Some(Material::TankSteel);
             }
@@ -1197,7 +1315,11 @@ impl<'a> TankBuildCtx<'a> {
             TurretShape::HexCast => Vec2::new(-rx * 0.36, rz * 0.62),
             _ => Vec2::new(-rx * 0.48, rz * 0.66),
         };
-        if (pt.x - ant.x).hypot(pt.z - ant.y) <= 0.05 && pt.y >= th - 0.03 && pt.y <= th + 0.34 {
+        let ant_h = (th * 0.52).clamp(0.20, 0.34);
+        if (pt.x - ant.x).hypot(pt.z - ant.y) <= (vs * 0.74).max(0.06)
+            && pt.y >= th - vs * 0.8
+            && pt.y <= th + ant_h
+        {
             return Some(self.pal.dark);
         }
 
@@ -1208,49 +1330,59 @@ impl<'a> TankBuildCtx<'a> {
         let br = self.p.barrel_radius;
         let bl = self.p.barrel_length;
         let gs = self.p.gun_voxel_size;
+        let rx = self.p.turret_radius_x;
+        let rz = self.p.turret_radius_z;
+        let th = self.p.turret_height;
         let r_xy = pt.x.hypot(pt.y);
 
         // 1. Полый канал ствола в дульной части (только 1x1 центральный воксель по X/Y).
-        if pt.z <= -bl + 0.22 && pt.z >= -bl - 0.02 && pt.x.abs() < gs * 0.5 && pt.y.abs() < gs * 0.5 {
+        let bore_len = (bl * 0.06).clamp(0.10, 0.22);
+        if pt.z <= -bl + bore_len && pt.z >= -bl - 0.02 && pt.x.abs() < gs * 0.5 && pt.y.abs() < gs * 0.5 {
             return None;
         }
 
-        // 2. Дульный тормоз (двухкамерный с реальными прорезями у Tiger I и ИС-3).
+        // 2. Дульный тормоз (двухкамерный с реальными прорезями у BoxHeavy и RoundedDome).
         let has_muzzle_brake = matches!(
             self.p.turret_shape,
             TurretShape::BoxHeavy | TurretShape::RoundedDome
         );
-        if has_muzzle_brake && pt.z >= -bl && pt.z <= -bl + 0.40 {
-            let rx_b = br * 1.90;
-            let ry_b = br * 1.42;
-            // Вырезы дульных камер по бокам ствола.
-            let in_slot_1 = pt.z >= -bl + 0.08 && pt.z <= -bl + 0.17;
-            let in_slot_2 = pt.z >= -bl + 0.22 && pt.z <= -bl + 0.31;
-            if (in_slot_1 || in_slot_2) && pt.x.abs() >= br * 0.85 && pt.y.abs() <= br * 0.72 {
-                return None;
-            }
-            if pt.x.abs() <= rx_b && pt.y.abs() <= ry_b {
-                let chamfer = (pt.x.abs() / rx_b).powi(2) + (pt.y.abs() / ry_b).powi(2);
-                if chamfer <= 1.42 {
-                    return Some(if in_slot_1 || in_slot_2 {
-                        Material::TankSteel
-                    } else {
-                        self.pal.dark
-                    });
+        if has_muzzle_brake {
+            let brake_len = (bl * 0.082).clamp(0.26, 0.40);
+            if pt.z >= -bl && pt.z <= -bl + brake_len {
+                let rx_b = br * 1.90;
+                let ry_b = br * 1.42;
+                // Вырезы дульных камер по бокам ствола.
+                let in_slot_1 = pt.z >= -bl + brake_len * 0.20 && pt.z <= -bl + brake_len * 0.425;
+                let in_slot_2 = pt.z >= -bl + brake_len * 0.55 && pt.z <= -bl + brake_len * 0.775;
+                if (in_slot_1 || in_slot_2) && pt.x.abs() >= br * 0.85 && pt.y.abs() <= br * 0.72 {
+                    return None;
+                }
+                if pt.x.abs() <= rx_b && pt.y.abs() <= ry_b {
+                    let chamfer = (pt.x.abs() / rx_b).powi(2) + (pt.y.abs() / ry_b).powi(2);
+                    if chamfer <= 1.42 {
+                        return Some(if in_slot_1 || in_slot_2 {
+                            Material::TankSteel
+                        } else {
+                            self.pal.dark
+                        });
+                    }
                 }
             }
-        } else if !has_muzzle_brake && pt.z >= -bl && pt.z <= -bl + 0.16 {
-            // Утолщение дульного среза (Т-34-85, СУ-100, M24).
-            if r_xy <= (br * 1.16).max(gs * 2.2) {
-                return Some(Material::TankSteel);
+        } else {
+            let ring_len = (bl * 0.04).clamp(0.08, 0.16);
+            if pt.z >= -bl && pt.z <= -bl + ring_len {
+                // Утолщение дульного среза (Т-34-85, СУ-100, M24 и лёгкие орудия).
+                if r_xy <= (br * 1.16).max(gs * 2.2) {
+                    return Some(Material::TankSteel);
+                }
             }
         }
 
         // 3. Откатной кожух / утолщённая казённая муфта ствола.
         let sleeve_len = match self.p.turret_shape {
-            TurretShape::CompactLight => 0.72,
-            TurretShape::BoxHeavy => 0.56,
-            _ => 0.68,
+            TurretShape::CompactLight => (bl * 0.24).clamp(0.22, 0.72),
+            TurretShape::BoxHeavy => (bl * 0.12).clamp(0.22, 0.56),
+            _ => (bl * 0.17).clamp(0.22, 0.68),
         };
         if pt.z >= -sleeve_len && pt.z <= 0.0 && r_xy <= br * 1.45 {
             return Some(self.pal.dark);
@@ -1259,43 +1391,62 @@ impl<'a> TankBuildCtx<'a> {
         // 4. Маска орудия по типу башни/рубки (с прицелом и спаренным пулемётом).
         let mantlet = match self.p.turret_shape {
             TurretShape::BoxHeavy => {
-                // Широкая ступенчатая маска KwK 36 (Tiger I).
-                let in_plate = pt.z >= -0.26
-                    && pt.z <= 0.24
-                    && pt.x.abs() <= 0.72
-                    && pt.y.abs() <= 0.22;
+                // Широкая ступенчатая маска (Tiger I / Pz IV).
+                let mx = (rx * 0.643).clamp(0.42, 0.74);
+                let my = (th * 0.26).clamp(0.14, 0.22);
+                let mz_f = -(rz * 0.20).clamp(0.16, 0.26);
+                let mz_b = (rz * 0.18).clamp(0.14, 0.24);
+                let in_plate = pt.z >= mz_f && pt.z <= mz_b && pt.x.abs() <= mx && pt.y.abs() <= my;
                 if in_plate {
+                    let s = mx / 0.72;
                     // Два отверстия бинокулярного прицела слева и спаренный MG справа.
-                    if pt.z < -0.14 && ((pt.x + 0.32).abs() <= 0.07 || (pt.x + 0.44).abs() <= 0.05) && pt.y.abs() <= 0.05 {
+                    if pt.z < mz_f * 0.54
+                        && ((pt.x + 0.32 * s).abs() <= 0.07 * s || (pt.x + 0.44 * s).abs() <= 0.05 * s)
+                        && pt.y.abs() <= 0.05
+                    {
                         return Some(Material::TankLens);
                     }
-                    if pt.z < -0.10 && (pt.x - 0.30).hypot(pt.y) <= 0.05 {
+                    if pt.z < mz_f * 0.38 && (pt.x - 0.30 * s).hypot(pt.y) <= 0.05 {
                         return Some(Material::TankSteel);
                     }
-                    return Some(self.pal.hull_paint(pt, pt.y > 0.14));
+                    return Some(self.pal.hull_paint(pt, pt.y > my * 0.64));
                 }
                 false
             }
             TurretShape::FixedCasemate => {
                 // Литая шаровая бронемаска СУ-100.
-                let ell = (pt.x / 0.36).powi(2) + (pt.y / 0.26).powi(2) + ((pt.z + 0.02) / 0.36).powi(2);
+                let ex = (rx * 0.353).clamp(0.22, 0.38);
+                let ey = (th * 0.36).clamp(0.16, 0.28);
+                let ez = (rz * 0.288).clamp(0.20, 0.36);
+                let ell = (pt.x / ex).powi(2) + (pt.y / ey).powi(2) + ((pt.z + 0.02) / ez).powi(2);
                 ell <= 1.0
             }
             TurretShape::HexCast => {
-                // Округлая литая «рыльцевидная» маска Д-5Т / С-53.
-                let ell = (pt.x / 0.34).powi(2) + (pt.y / 0.23).powi(2) + ((pt.z + 0.04) / 0.32).powi(2);
+                // Округлая литая «рыльцевидная» маска.
+                let ex = (rx * 0.358).clamp(0.20, 0.36);
+                let ey = (th * 0.307).clamp(0.15, 0.24);
+                let ez = (rz * 0.278).clamp(0.18, 0.32);
+                let ell = (pt.x / ex).powi(2) + (pt.y / ey).powi(2) + ((pt.z + 0.04) / ez).powi(2);
                 ell <= 1.0
             }
             TurretShape::RoundedDome => {
-                // Узкая клиновидная маска ИС-3.
-                pt.z >= -0.32
-                    && pt.z <= 0.28
-                    && pt.x.abs() <= 0.31
-                    && pt.y.abs() <= 0.21 - (pt.z + 0.32).max(0.0) * 0.05
+                // Клиновидная маска (ИС-3 / Першинг / Шерман).
+                let mx = (rx * 0.287).clamp(0.20, 0.32);
+                let my = (th * 0.328).clamp(0.15, 0.22);
+                let mz_f = -(rz * 0.246).clamp(0.18, 0.32);
+                let mz_b = (rz * 0.215).clamp(0.16, 0.28);
+                pt.z >= mz_f
+                    && pt.z <= mz_b
+                    && pt.x.abs() <= mx
+                    && pt.y.abs() <= my - (pt.z - mz_f).max(0.0) * 0.05
             }
             TurretShape::CompactLight => {
-                // Компактный щиток 75-мм пушки Chaffee.
-                pt.z >= -0.26 && pt.z <= 0.24 && pt.x.abs() <= 0.28 && pt.y.abs() <= 0.19
+                // Компактный щиток лёгких пушек.
+                let mx = (rx * 0.341).clamp(0.15, 0.28);
+                let my = (th * 0.292).clamp(0.12, 0.19);
+                let mz_f = -(rz * 0.255).clamp(0.14, 0.26);
+                let mz_b = (rz * 0.235).clamp(0.14, 0.24);
+                pt.z >= mz_f && pt.z <= mz_b && pt.x.abs() <= mx && pt.y.abs() <= my
             }
         };
         if mantlet {
@@ -1427,22 +1578,22 @@ mod tests {
     }
 
     #[test]
-    fn all_five_tanks_build_distinct_detailed_models_and_enemy_camo() {
+    fn all_fifteen_tanks_build_distinct_detailed_models_and_enemy_camo() {
         let tanks = available_tanks();
-        assert_eq!(tanks.len(), 5);
+        assert_eq!(tanks.len(), 15);
         let mut counts = Vec::new();
         for t in &tanks {
             let parts = build_tank_parts_for_team(&t.profile, Team::Player);
             let h = parts.hull.count_solid();
             let tr = parts.turret.count_solid();
             let b = parts.barrel.count_solid();
-            assert!(h > 3_500 && tr > 700 && b > 300, "{}: {h}/{tr}/{b}", t.id);
+            assert!(h > 1_000 && tr > 220 && b > 140, "{}: {h}/{tr}/{b}", t.id);
 
             let hm = mesh_grid_ao(&parts.hull);
             let tm = mesh_grid_ao(&parts.turret);
             let bm = mesh_grid_ao(&parts.barrel);
             let total_quads = hm.quad_count() + tm.quad_count() + bm.quad_count();
-            assert!(total_quads < 40_000, "{}: quads={total_quads}", t.id);
+            assert!(total_quads < 45_000, "{}: quads={total_quads}", t.id);
 
             // На дульном срезе канал ствола полый в самом центре (0, 0).
             let tip = Vec3::new(0.0, 0.0, -t.profile.barrel_length + 0.04);
@@ -1458,9 +1609,11 @@ mod tests {
         }
 
         // Проверяем различие габаритов и дульных тормозов.
+        let ms1 = counts.iter().find(|c| c.0 == "ms_1").unwrap();
         let m24 = counts.iter().find(|c| c.0 == "m24_chaffee").unwrap();
         let tiger = counts.iter().find(|c| c.0 == "tiger_1").unwrap();
         assert!(tiger.1 > m24.1 && tiger.3 > m24.3);
+        assert!(tiger.1 > ms1.1 && tiger.2 > ms1.2 && tiger.3 > ms1.3);
 
         let tiger_parts = build_tank_parts(&load_tank_spec("tiger_1").unwrap().profile);
         let t34_parts = build_tank_parts(&load_tank_spec("t34_85").unwrap().profile);
@@ -1537,7 +1690,7 @@ mod tests {
     }
 
     #[test]
-    fn all_five_tanks_have_no_floating_disconnected_voxels() {
+    fn all_fifteen_tanks_have_no_floating_disconnected_voxels() {
         for t in available_tanks() {
             let parts = build_tank_parts_for_team(&t.profile, Team::Player);
             for (part_name, grid) in [

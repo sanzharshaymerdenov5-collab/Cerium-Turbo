@@ -63,6 +63,14 @@ pub struct SelectedTank(pub TankId);
 #[derive(Resource, Debug, Clone)]
 pub struct SelectedMap(pub String);
 
+/// Порядок инициализации боя при входе в `GameState::InBattle`.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BattleSetupSet {
+    ResolveMap,
+    SpawnWorld,
+    SpawnHud,
+}
+
 pub struct CorePlugin;
 
 impl Plugin for CorePlugin {
@@ -70,7 +78,16 @@ impl Plugin for CorePlugin {
         app.init_state::<GameState>()
             .init_resource::<DamageRulesMode>()
             .init_resource::<BattleStatus>()
-            .insert_resource(SelectedTank(TankId("t34_85".into())))
-            .insert_resource(SelectedMap("proving_grounds".into()));
+            .insert_resource(SelectedTank(TankId("ms_1".into())))
+            .insert_resource(SelectedMap("proving_grounds".into()))
+            .configure_sets(
+                OnEnter(GameState::InBattle),
+                (
+                    BattleSetupSet::ResolveMap,
+                    BattleSetupSet::SpawnWorld,
+                    BattleSetupSet::SpawnHud,
+                )
+                    .chain(),
+            );
     }
 }

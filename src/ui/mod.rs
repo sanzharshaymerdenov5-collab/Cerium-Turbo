@@ -6,7 +6,7 @@ pub mod xray_cam;
 
 use bevy::prelude::*;
 
-use crate::core::GameState;
+use crate::core::{BattleSetupSet, GameState};
 
 const BUNDLED_FONT: &[u8] = include_bytes!("../../assets/fonts/DejaVuSansMono.ttf");
 
@@ -24,7 +24,10 @@ impl Plugin for UiPlugin {
             .add_systems(Update, hangar::update_hangar.run_if(in_state(GameState::Hangar)))
             .add_systems(
                 OnEnter(GameState::InBattle),
-                (hud::setup_hud, xray_cam::setup_xray_hit_cam),
+                (
+                    hud::setup_hud.in_set(BattleSetupSet::SpawnHud),
+                    xray_cam::setup_xray_hit_cam,
+                ),
             )
             .add_systems(
                 Update,

@@ -121,6 +121,8 @@ pub struct MapSpec {
     pub structures: Vec<StructureSpec>,
     pub targets: Vec<TargetSpec>,
     #[serde(default)]
+    pub ally_spawns: Vec<EnemySpawnSpec>,
+    #[serde(default)]
     pub enemy_spawns: Vec<EnemySpawnSpec>,
     #[serde(default)]
     pub waypoints: Vec<(f32, f32)>,
@@ -137,6 +139,8 @@ pub const CITY_RUINS_RON: &str = include_str!("../../assets/maps/city_ruins.ron"
 pub const DESERT_CANYON_RON: &str = include_str!("../../assets/maps/desert_canyon.ron");
 pub const FROZEN_FORT_RON: &str = include_str!("../../assets/maps/frozen_fort.ron");
 pub const RAIL_YARD_RON: &str = include_str!("../../assets/maps/rail_yard.ron");
+
+pub const RANDOM_MAP_ID: &str = "random";
 
 pub fn load_map_spec(id: &str) -> Option<MapSpec> {
     match id {
@@ -160,4 +164,17 @@ pub fn available_maps() -> Vec<MapSpec> {
     .iter()
     .filter_map(|id| load_map_spec(id))
     .collect()
+}
+
+/// Разрешает выбранный идентификатор карты (включая `RANDOM_MAP_ID = "random"`) в конкретную карту боя.
+pub fn resolve_map_spec(selected_id: &str, seed: u64) -> MapSpec {
+    let maps = available_maps();
+    if selected_id == RANDOM_MAP_ID && !maps.is_empty() {
+        let mut rng = crate::voxel::Rng::new(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let idx = ((rng.next_u64() >> 32) as usize) % maps.len();
+        return maps[idx].clone();
+    }
+    load_map_spec(selected_id)
+        .or_else(|| maps.into_iter().next())
+        .expect("at least one built-in map must exist")
 }

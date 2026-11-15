@@ -8,10 +8,11 @@ use super::geometry::ray_plate;
 use super::penetration::{ImpactOutcome, evaluate_impact};
 use super::shell::ShellSpec;
 use crate::core::{GameState, Team};
-use crate::tank::{ArmorOwner, ArmorZone};
+use crate::tank::{ArmorOwner, ArmorZone, PlayerTank};
 use crate::voxel::{Debris, Material, Rng, VoxelAssets, VoxelWorld, spawn_debris_burst};
 
-pub const GRAVITY: f32 = 9.81;
+/// Прямолинейный полёт без гравитационного снижения (Обновление 1.3).
+pub const GRAVITY: f32 = 0.0;
 /// Время жизни снаряда, с.
 pub const SHELL_LIFETIME: f32 = 10.0;
 /// Максимум рикошетов.
@@ -210,6 +211,7 @@ fn step_projectiles(
     time: Res<Time>,
     mut world: ResMut<VoxelWorld>,
     plates: Query<(Entity, &GlobalTransform, &ArmorPlate, &TargetInfo, Option<&ArmorOwner>)>,
+    player_q: Query<Entity, With<PlayerTank>>,
     mut shells: Query<(Entity, &mut Projectile, &mut Transform)>,
     debris: Query<(), With<Debris>>,
     assets: Option<Res<VoxelAssets>>,
@@ -226,6 +228,7 @@ fn step_projectiles(
     *seed = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut rng = Rng::new(*seed | 1);
     let mut debris_count = debris.iter().count();
+    let human_ent = player_q.single().ok();
 
     for (entity, mut shell, mut tf) in &mut shells {
         shell.age += dt;
@@ -309,7 +312,11 @@ fn step_projectiles(
                         ),
                     ),
                 };
-                if shell.shooter_team != Some(Team::Enemy) || owner.is_some() {
+                let record_log = match human_ent {
+                    Some(p) => shell.shooter == Some(p) || owner.is_some_and(|o| o.tank == p),
+                    None => shell.shooter_team != Some(Team::Enemy) || owner.is_some(),
+                };
+                if record_log {
                     log.push(kind, text);
                 }
 
@@ -358,7 +365,11 @@ fn step_projectiles(
                 if hit.material.is_destructible() {
                     let res = world.carve_sphere(hit.point + dir * 0.25, CRATER_RADIUS);
                     let removed_count = res.removed.len();
-                    if shell.shooter_team != Some(Team::Enemy) {
+                    let record_log = match human_ent {
+                        Some(p) => shell.shooter == Some(p),
+                        None => shell.shooter_team != Some(Team::Enemy),
+                    };
+                    if record_log {
                         log.push(
                             HitKind::Structure,
                             format!(
@@ -395,7 +406,11 @@ fn step_projectiles(
                         );
                     }
                 } else {
-                    if shell.shooter_team != Some(Team::Enemy) {
+                    let record_log = match human_ent {
+                        Some(p) => shell.shooter == Some(p),
+                        None => shell.shooter_team != Some(Team::Enemy),
+                    };
+                    if record_log {
                         log.push(HitKind::Terrain, "Рельеф: снаряд застрял".to_string());
                     }
                     terrain_impacts.write(TerrainImpactMessage {

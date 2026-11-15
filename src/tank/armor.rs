@@ -71,7 +71,7 @@ pub fn hull_plate_specs(spec: &TankSpec) -> Vec<TankPlateDesc> {
     let a = &spec.armor;
     let hl = p.hull_length * 0.5;
     let hw = p.hull_width * 0.5;
-    let inner_w = (hw - p.track_width * 0.45).max(0.8);
+    let inner_w = (hw - p.track_width * 0.45).max(0.50);
     let side_half_y = ((p.deck_height - 0.25) * 0.52).max(0.35);
     let side_y = 0.25 + side_half_y;
 
@@ -267,7 +267,7 @@ pub fn spawn_tank_armor_plates(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tank::spec::load_tank_spec;
+    use crate::tank::spec::{available_tanks, load_tank_spec};
 
     #[test]
     fn hull_and_turret_plate_normals_point_outward() {
@@ -323,5 +323,21 @@ mod tests {
         let tf = su_t.iter().find(|p| p.zone == ArmorZone::TurretFront).unwrap();
         let n = tf.local_rot * Vec3::Z;
         assert!(n.y > 0.7 && n.z < -0.5, "SU-100 front casemate n={n:?}");
+    }
+
+    #[test]
+    fn all_fifteen_tanks_produce_valid_hull_and_turret_plates() {
+        let tanks = available_tanks();
+        assert_eq!(tanks.len(), 15);
+        for spec in &tanks {
+            let hull = hull_plate_specs(spec);
+            let turret = turret_plate_specs(spec);
+            assert!(hull.len() >= 6, "{} hull plates={}", spec.id, hull.len());
+            assert_eq!(turret.len(), 5, "{} turret plates", spec.id);
+            for plate in hull.iter().chain(turret.iter()) {
+                assert!(plate.half_extents.x > 0.1 && plate.half_extents.y > 0.1, "{}: {:?}", spec.id, plate.zone);
+                assert!(plate.thickness_mm > 0.0, "{}: {:?}", spec.id, plate.zone);
+            }
+        }
     }
 }

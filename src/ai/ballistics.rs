@@ -6,7 +6,7 @@ use crate::voxel::Rng;
 
 /// Вычисляет точку прицеливания с учётом:
 /// 1) движения цели (`target_vel`),
-/// 2) падения сплошного AP-снаряда под действием гравитации (`gravity`).
+/// 2) горизонтально-прямолинейной траектории (`gravity`, в Обновлении 1.3 = `0.0`).
 pub fn compute_ballistic_lead(
     muzzle_pos: Vec3,
     target_pos: Vec3,
@@ -41,15 +41,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ballistic_lead_compensates_gravity_and_target_velocity() {
+    fn straight_lead_compensates_target_velocity_without_gravity_drop() {
         let muzzle = Vec3::new(0.0, 2.0, 0.0);
         let target = Vec3::new(0.0, 2.0, -400.0);
         let vel = Vec3::new(15.0, 0.0, 0.0);
-        let aim = compute_ballistic_lead(muzzle, target, vel, 800.0, 9.81);
+        let aim = compute_ballistic_lead(muzzle, target, vel, 800.0, 0.0);
 
         // Время полёта ~0.5 с -> цель сместится примерно на +7.5 м по X,
-        // а снаряд просядет на 0.5 * 9.81 * 0.25 ≈ 1.226 м по Y.
+        // без гравитационного падения высота Y остаётся неизменной.
         assert!((aim.x - 7.5).abs() < 0.3, "aim.x={}", aim.x);
-        assert!(aim.y > target.y + 1.0 && aim.y < target.y + 1.5, "aim.y={}", aim.y);
+        assert!((aim.y - target.y).abs() < 1e-3, "aim.y={}", aim.y);
     }
 }

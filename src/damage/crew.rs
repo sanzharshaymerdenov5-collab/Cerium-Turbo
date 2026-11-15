@@ -93,7 +93,7 @@ impl TankCrew {
         let p = &spec.profile;
         let hl = p.hull_length * 0.5;
         let hw = p.hull_width * 0.5;
-        let inner_w = (hw - p.track_width * 0.5).max(0.75);
+        let inner_w = (hw - p.track_width * 0.5).max(0.50);
         let rx = p.turret_radius_x;
         let rz = p.turret_radius_z;
         let th = p.turret_height;

@@ -279,7 +279,7 @@ pub fn tank_fire_system(
             continue;
         }
         st.reload_timer = root.spec.reload_s * reload_mult;
-        if team != Some(Team::Enemy) {
+        if player_opt.is_some() {
             log.shots += 1;
         }
 

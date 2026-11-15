@@ -1,8 +1,8 @@
-//! Боевой HUD (Обновление 1.2):
-//! - Верхняя тактическая панель: спидометр/перезарядка, счёт команд, компактное управление;
+//! Боевой HUD (Обновление 1.3):
+//! - Верхняя тактическая панель: спидометр/перезарядка, счёт команд 5v5, управление;
 //! - Многокомпонентный прицел с индикатором бронепробития, хит-маркером и снайперской оптикой;
 //! - Нижние панели живучести (WoT ХП + модули / WT экипаж + модули) и слоты БК/снаряжения;
-//! - Реал-тайм тактическая мини-карта со строениями/льдом, журналом попаданий и 3D-маркерами врагов.
+//! - Реал-тайм тактическая мини-карта (игрок, союзники, враги), журнал попаданий и 3D-маркеры.
 
 use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
@@ -17,9 +17,16 @@ use crate::damage::{
     CrewRole, CrewState, DamageFeed, ModuleKind, ModuleState, PenIndicator, TankCrew,
     TankDestroyedMessage, TankHealth, TankModules, classify_penetration,
 };
-use crate::maps::{MapBiome, MapSpec, PROVING_GROUNDS_RON, load_map_spec, spec::StructureSpec};
+use crate::maps::{
+    ActiveBattleMap, MapBiome, MapSpec, PROVING_GROUNDS_RON, load_map_spec, resolve_map_spec,
+    spec::StructureSpec,
+};
+use crate::progression::{
+    BattleRewardTracker, LastBattleReward, PlayerProgression, finalize_battle_reward,
+};
 use crate::tank::{AimTarget, PlayerTank, TankCamera, TankCombat, TankRoot, TankState, load_tank_spec};
 
+const MAX_ALLY_MARKERS: usize = 6;
 const MAX_ENEMY_MARKERS: usize = 8;
 const MINIMAP_PX: f32 = 168.0;
 
@@ -98,6 +105,7 @@ pub enum HudText {
     SlotRepair,
     SlotExtinguisher,
     BattleBanner,
+    AllyMarker(usize),
     EnemyMarker(usize),
     ModuleBadge(ModuleKind),
     CrewBadge(CrewRole),
@@ -116,12 +124,16 @@ pub enum HudPanel {
     ModuleBox(ModuleKind),
     CrewBox(CrewRole),
     BattleBanner,
+    AllyMarker(usize),
+    AllyMarkerHpBar(usize),
+    AllyMarkerHpFill(usize),
     EnemyMarker(usize),
     EnemyMarkerHpBar(usize),
     EnemyMarkerHpFill(usize),
     SniperOverlay,
     MinimapPlayerDot,
     MinimapAimDot,
+    MinimapAllyDot(usize),
     MinimapEnemyDot(usize),
 }
 
@@ -137,18 +149,25 @@ fn minimap_bg_color(biome: MapBiome) -> Color {
 
 pub fn setup_hud(
     mut commands: Commands,
+    active_map: Option<Res<ActiveBattleMap>>,
     selected_map: Option<Res<SelectedMap>>,
     selected_tank: Option<Res<SelectedTank>>,
 ) {
     commands.insert_resource(HudHitMarker::default());
 
-    let map_spec = selected_map
-        .as_ref()
-        .and_then(|s| load_map_spec(&s.0))
+    let map_spec = active_map
+        .map(|m| m.0.clone())
+        .or_else(|| {
+            selected_map
+                .as_ref()
+                .map(|s| resolve_map_spec(&s.0, 1))
+                .or_else(|| load_map_spec("proving_grounds"))
+        })
         .unwrap_or_else(|| MapSpec::from_ron(PROVING_GROUNDS_RON).expect("default map"));
     let tank_spec = selected_tank
         .as_ref()
         .and_then(|t| load_tank_spec(&t.0.0))
+        .or_else(|| load_tank_spec("ms_1"))
         .or_else(|| load_tank_spec("t34_85"));
 
     let bounds = HudMapBounds {
@@ -159,8 +178,8 @@ pub fn setup_hud(
     };
     commands.insert_resource(bounds.clone());
 
-    let initial_caliber = tank_spec.as_ref().map_or(85.0, |s| s.shell.caliber_mm);
-    let initial_name = tank_spec.as_ref().map_or("Т-34-85", |s| s.name.as_str());
+    let initial_caliber = tank_spec.as_ref().map_or(37.0, |s| s.shell.caliber_mm);
+    let initial_name = tank_spec.as_ref().map_or("МС-1 (Т-18)", |s| s.name.as_str());
 
     // Рамка снайперского прицела и оптическая сетка (спавним первой, чтобы не перекрывать HUD).
     commands
@@ -311,7 +330,10 @@ pub fn setup_hud(
                 .with_children(|score| {
                     score.spawn((
                         HudText::TeamStrip,
-                        Text::new(format!("СОЮЗ ■  |  {}  •  v1.2  |  ■ ■ ■ ВРАГ", map_spec.name)),
+                        Text::new(format!(
+                            "СОЮЗ ■ ■ ■ ■ ■  |  {}  •  v1.3  |  ■ ■ ■ ■ ■ ВРАГ",
+                            map_spec.name
+                        )),
                         TextFont::from_font_size(13.0),
                         TextColor(Color::srgb(0.92, 0.94, 0.96)),
                     ));
@@ -899,6 +921,26 @@ pub fn setup_hud(
                                         Visibility::Inherited,
                                     ));
 
+                                    // Пул меток союзников (бирюзово-синие точки).
+                                    for i in 0..MAX_ALLY_MARKERS {
+                                        canvas.spawn((
+                                            HudPanel::MinimapAllyDot(i),
+                                            Node {
+                                                position_type: PositionType::Absolute,
+                                                left: Val::Px(0.0),
+                                                top: Val::Px(0.0),
+                                                width: Val::Px(7.0),
+                                                height: Val::Px(7.0),
+                                                border: UiRect::all(Val::Px(1.0)),
+                                                border_radius: BorderRadius::all(Val::Px(3.5)),
+                                                ..default()
+                                            },
+                                            BackgroundColor(Color::srgb(0.24, 0.72, 0.98)),
+                                            BorderColor::all(Color::srgb(0.76, 0.94, 1.0)),
+                                            Visibility::Hidden,
+                                        ));
+                                    }
+
                                     // Пул меток врагов (красные ромбы/квадраты).
                                     for i in 0..MAX_ENEMY_MARKERS {
                                         canvas.spawn((
@@ -924,16 +966,16 @@ pub fn setup_hud(
             });
         });
 
-    // Итоговый баннер победы/поражения по центру.
+    // Итоговый баннер победы/поражения или наблюдателя по центру.
     commands
         .spawn((
             HudPanel::BattleBanner,
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Percent(22.0),
-                left: Val::Percent(24.0),
-                width: Val::Percent(52.0),
-                padding: UiRect::axes(Val::Px(24.0), Val::Px(18.0)),
+                top: Val::Percent(20.0),
+                left: Val::Percent(22.0),
+                width: Val::Percent(56.0),
+                padding: UiRect::axes(Val::Px(24.0), Val::Px(16.0)),
                 border: UiRect::all(Val::Px(2.0)),
                 border_radius: BorderRadius::all(Val::Px(6.0)),
                 justify_content: JustifyContent::Center,
@@ -948,10 +990,64 @@ pub fn setup_hud(
             b.spawn((
                 HudText::BattleBanner,
                 Text::new(""),
-                TextFont::from_font_size(21.0),
+                TextFont::from_font_size(20.0),
                 TextColor(Color::WHITE),
             ));
         });
+
+    // Пул 3D->2D маркеров над союзниками.
+    for i in 0..MAX_ALLY_MARKERS {
+        commands
+            .spawn((
+                HudPanel::AllyMarker(i),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    min_width: Val::Px(96.0),
+                    padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(2.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.03, 0.09, 0.16, 0.76)),
+                BorderColor::all(Color::srgb(0.28, 0.72, 0.96)),
+                Visibility::Hidden,
+                DespawnOnExit(GameState::InBattle),
+            ))
+            .with_children(|m| {
+                m.spawn((
+                    HudText::AllyMarker(i),
+                    Text::new(""),
+                    TextFont::from_font_size(11.0),
+                    TextColor(Color::srgb(0.80, 0.94, 1.0)),
+                ));
+                m.spawn((
+                    HudPanel::AllyMarkerHpBar(i),
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(3.5),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.06, 0.14, 0.22, 0.9)),
+                    Visibility::Inherited,
+                ))
+                .with_children(|bar| {
+                    bar.spawn((
+                        HudPanel::AllyMarkerHpFill(i),
+                        Node {
+                            width: Val::Percent(100.0),
+                            height: Val::Percent(100.0),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgb(0.28, 0.78, 0.96)),
+                        Visibility::Inherited,
+                    ));
+                });
+            });
+    }
 
     // Пул 3D->2D маркеров над вражескими танками со встроенной мини-полосой ХП.
     for i in 0..MAX_ENEMY_MARKERS {
@@ -1020,6 +1116,11 @@ pub fn update_hud(
         Res<DamageFeed>,
         Res<BattleStatus>,
     ),
+    mut progression: (
+        Option<ResMut<PlayerProgression>>,
+        Option<ResMut<BattleRewardTracker>>,
+        Option<ResMut<LastBattleReward>>,
+    ),
     map_bounds: Option<Res<HudMapBounds>>,
     mut hit_marker: ResMut<HudHitMarker>,
     mut msg_resources: (
@@ -1034,6 +1135,7 @@ pub fn update_hud(
     ),
     player_q: Query<
         (
+            Entity,
             &GlobalTransform,
             &TankRoot,
             &TankState,
@@ -1044,7 +1146,7 @@ pub fn update_hud(
         ),
         With<PlayerTank>,
     >,
-    all_combat: Query<(&GlobalTransform, &TankCombat, Option<&TankHealth>)>,
+    all_combat: Query<(Entity, &GlobalTransform, &TankCombat, Option<&TankHealth>)>,
     cams: Query<(&Camera, &GlobalTransform, &TankCamera), With<Camera3d>>,
     mut texts: Query<(&HudText, &mut Text, Option<&mut TextColor>)>,
     mut panels: Query<(
@@ -1057,6 +1159,15 @@ pub fn update_hud(
 ) {
     let (mode, aim, log, feed, status) = state;
     if keys.just_pressed(KeyCode::Tab) {
+        if let (Some(mut prog), Some(mut tracker), Some(mut last_reward)) = (
+            progression.0.take(),
+            progression.1.take(),
+            progression.2.take(),
+        ) {
+            let victory = *status == BattleStatus::Victory;
+            let early_exit = *status == BattleStatus::Ongoing;
+            finalize_battle_reward(&mut prog, &mut tracker, &mut last_reward, victory, early_exit);
+        }
         if let Some(ref mut ui_s) = msg_resources.2 {
             ui_s.write(UiSoundMessage(SoundPreset::UiClick));
         }
@@ -1069,9 +1180,16 @@ pub fn update_hud(
         hit_marker.timer = (hit_marker.timer - dt).max(0.0);
     }
 
+    let player = player_q.single().ok();
+    let human_ent = player.map(|(e, ..)| e);
+
     if let Some(ref msgs) = msg_resources.0 {
         for msg in cursors.0.read(msgs) {
-            if msg.shooter_team == Some(Team::Player) && msg.owner_tank.is_some() {
+            let by_human = human_ent.is_some()
+                && msg.shooter == human_ent
+                && msg.owner_tank.is_some()
+                && msg.owner_tank != human_ent;
+            if by_human {
                 match msg.outcome {
                     ImpactOutcome::Penetration { .. } => {
                         hit_marker.timer = 0.45;
@@ -1097,7 +1215,7 @@ pub fn update_hud(
     }
     if let Some(ref msgs) = msg_resources.1 {
         for msg in cursors.1.read(msgs) {
-            if msg.team == Team::Enemy {
+            if msg.team == Team::Enemy && human_ent.is_some() && msg.killer == human_ent {
                 hit_marker.timer = 0.85;
                 hit_marker.is_pen = true;
                 hit_marker.is_kill = true;
@@ -1113,24 +1231,37 @@ pub fn update_hud(
     let cam_opt = cams.iter().next();
     let sniper = cam_opt.is_some_and(|(_, _, c)| c.sniper);
 
+    let mut ally_total = 0usize;
+    let mut ally_alive = 0usize;
     let mut enemy_total = 0usize;
     let mut enemy_alive = 0usize;
+    let mut alive_allies = Vec::new();
     let mut alive_enemies = Vec::new();
-    for (gt, c, h) in &all_combat {
-        if c.team == Team::Enemy {
-            enemy_total += 1;
-            if c.alive {
-                enemy_alive += 1;
-                alive_enemies.push((gt.translation(), c, h.copied()));
+    for (ent, gt, c, h) in &all_combat {
+        match c.team {
+            Team::Player => {
+                ally_total += 1;
+                if c.alive {
+                    ally_alive += 1;
+                    if Some(ent) != human_ent {
+                        alive_allies.push((gt.translation(), c, h.copied()));
+                    }
+                }
+            }
+            Team::Enemy => {
+                enemy_total += 1;
+                if c.alive {
+                    enemy_alive += 1;
+                    alive_enemies.push((gt.translation(), c, h.copied()));
+                }
             }
         }
     }
 
-    let player = player_q.single().ok();
-    let player_pos = player.map(|(gt, _, _, _, _, _, _)| gt.translation());
-    let player_alive = player.is_some_and(|(_, _, _, c, _, _, _)| c.alive);
+    let player_pos = player.map(|(_, gt, ..)| gt.translation());
+    let player_alive = player.is_some_and(|(_, _, _, _, c, ..)| c.alive);
     let pen_ind = match (player, aim.target_plate) {
-        (Some((_, root, _, _, _, _, _)), Some(plate)) => classify_penetration(
+        (Some((_, _, root, ..)), Some(plate)) => classify_penetration(
             &root.spec.shell,
             aim.distance,
             plate.thickness_mm,
@@ -1140,7 +1271,7 @@ pub fn update_hud(
     };
 
     let (title_str, telemetry_str, reload_str, reload_ready, reload_broken) =
-        if let Some((_, root, st, combat, _, mods_opt, crew_opt)) = player {
+        if let Some((_, _, root, st, combat, _, mods_opt, crew_opt)) = player {
             let (gun_status, ready, broken) = if !combat.alive {
                 ("ТАНК УНИЧТОЖЕН".to_string(), false, true)
             } else if combat.gun_jammed {
@@ -1204,15 +1335,18 @@ pub fn update_hud(
         DamageRulesMode::ModulesOnlyWt => "WT",
         DamageRulesMode::PrototypeTargets => "Прот.",
     };
-    let ally_glyph = if player_alive { "■" } else { "□" };
+    let ally_icons: String = (0..ally_total.max(1))
+        .map(|i| if i < ally_alive { "■" } else { "□" })
+        .collect::<Vec<_>>()
+        .join(" ");
     let enemy_icons: String = (0..enemy_total)
         .map(|i| if i < enemy_alive { "■" } else { "□" })
         .collect::<Vec<_>>()
         .join(" ");
     let team_strip_str = if enemy_total == 0 {
-        format!("СОЮЗ {ally_glyph}  |  {map_title} ({mode_short})  •  v1.2  |  МИШЕНИ")
+        format!("СОЮЗ {ally_icons}  |  {map_title} ({mode_short})  •  v1.3  |  МИШЕНИ")
     } else {
-        format!("СОЮЗ {ally_glyph}  |  {map_title} ({mode_short})  •  v1.2  |  {enemy_icons} ВРАГ")
+        format!("СОЮЗ {ally_icons}  |  {map_title} ({mode_short})  •  v1.3  |  {enemy_icons} ВРАГ")
     };
 
     let controls_str = format!(
@@ -1229,7 +1363,7 @@ pub fn update_hud(
         let err = aim.point.distance(aim.gun_point);
         let spread = if err < 0.8 { "СВЕДЁН" } else { "НАВОДКА..." };
         match (&aim.target_name, aim.target_plate, player) {
-            (Some(name), Some(plate), Some((_, root, _, _, _, _, _))) => {
+            (Some(name), Some(plate), Some((_, _, root, ..))) => {
                 let eff = effective_armor_mm(&root.spec.shell, plate.thickness_mm, plate.angle_deg);
                 let pen = penetration_at(&root.spec.shell, aim.distance);
                 format!(
@@ -1267,10 +1401,10 @@ pub fn update_hud(
         s.trim_end().to_string()
     };
 
-    let hp_opt = player.and_then(|(_, _, _, _, h, _, _)| h);
-    let mods_opt = player.and_then(|(_, _, _, _, _, m, _)| m);
-    let crew_opt = player.and_then(|(_, _, _, _, _, _, c)| c);
-    let reload_info = player.map(|(_, root, st, combat, _, _, _)| {
+    let hp_opt = player.and_then(|(_, _, _, _, _, h, ..)| h);
+    let mods_opt = player.and_then(|(_, _, _, _, _, _, m, _)| m);
+    let crew_opt = player.and_then(|(_, _, _, _, _, _, _, c)| c);
+    let reload_info = player.map(|(_, _, root, st, combat, ..)| {
         let total = root.spec.reload_s.max(0.1);
         let progress = if !combat.alive || combat.gun_jammed {
             0.0
@@ -1303,7 +1437,7 @@ pub fn update_hud(
         }
     };
 
-    let caliber_mm = player.map_or(85.0, |(_, r, _, _, _, _, _)| r.spec.shell.caliber_mm);
+    let caliber_mm = player.map_or(37.0, |(_, _, r, ..)| r.spec.shell.caliber_mm);
     let repair_charges = mods_opt.map_or(0, |m| m.repair_charges);
     let ext_charges = mods_opt.map_or(0, |m| m.extinguisher_charges);
 
@@ -1394,18 +1528,56 @@ pub fn update_hud(
                 txt.0 = format!("[6] Огнет. ×{ext_charges}");
             }
             HudText::BattleBanner => match *status {
-                BattleStatus::Ongoing => {}
+                BattleStatus::Ongoing => {
+                    if !player_alive && ally_alive > 0 {
+                        txt.0 = format!(
+                            "ВАШ ТАНК ПОДБИТ — ИДЁТ БОЙ СОЮЗНИКОВ (5v5)\nСоюзники в строю: {ally_alive}/{ally_total}  •  Противники: {enemy_alive}/{enemy_total}  •  [Tab] — выйти в ангар"
+                        );
+                    }
+                }
                 BattleStatus::Victory => {
-                    txt.0 = format!(
-                        "ПОБЕДА! Все враги уничтожены\nВыстрелов: {} • Пробитий: {} • [Tab] — в ангар",
-                        log.shots, log.penetrations
-                    );
+                    if let Some(ref lr) = progression.2
+                        && lr.active
+                    {
+                        let bonus = if lr.random_bonus {
+                            " (+10% случ. карта)"
+                        } else {
+                            ""
+                        };
+                        txt.0 = format!(
+                            "ПОБЕДА! Все враги уничтожены{bonus}\n\
+                             Награда: +{} серебра  •  +{} опыта  |  Фраги: {}  •  Пробития: {}  •  Урон: {:.0}\n\
+                             [Tab] — вернуться в ангар",
+                            lr.credits_earned, lr.xp_earned, lr.kills, lr.penetrations, lr.damage
+                        );
+                    } else {
+                        txt.0 = format!(
+                            "ПОБЕДА! Все враги уничтожены\nВыстрелов: {} • Пробитий: {} • [Tab] — в ангар",
+                            log.shots, log.penetrations
+                        );
+                    }
                 }
                 BattleStatus::Defeat => {
-                    txt.0 = format!(
-                        "ПОРАЖЕНИЕ! Ваш танк подбит\nВыстрелов: {} • Пробитий: {} • [Tab] — в ангар",
-                        log.shots, log.penetrations
-                    );
+                    if let Some(ref lr) = progression.2
+                        && lr.active
+                    {
+                        let bonus = if lr.random_bonus {
+                            " (+10% случ. карта)"
+                        } else {
+                            ""
+                        };
+                        txt.0 = format!(
+                            "ПОРАЖЕНИЕ! Союзная группа потеряна{bonus}\n\
+                             Награда: +{} серебра  •  +{} опыта  |  Фраги: {}  •  Пробития: {}  •  Урон: {:.0}\n\
+                             [Tab] — вернуться в ангар",
+                            lr.credits_earned, lr.xp_earned, lr.kills, lr.penetrations, lr.damage
+                        );
+                    } else {
+                        txt.0 = format!(
+                            "ПОРАЖЕНИЕ! Союзная группа потеряна\nВыстрелов: {} • Пробитий: {} • [Tab] — в ангар",
+                            log.shots, log.penetrations
+                        );
+                    }
                 }
             },
             HudText::ModuleBadge(kind) => {
@@ -1451,6 +1623,19 @@ pub fn update_hud(
                             CrewState::Unconscious => Color::srgb(1.0, 0.52, 0.50),
                         };
                     }
+                }
+            }
+            HudText::AllyMarker(idx) => {
+                if let Some(&(apos, ac, ah)) = alive_allies.get(idx) {
+                    let dist = player_pos.map_or(0.0, |p| p.distance(apos));
+                    txt.0 = match (*mode, ah) {
+                        (DamageRulesMode::ArcadeHpAndModules, Some(h)) => {
+                            format!("◆ {} {:.0}м [{:.0} HP]", ac.tank_name, dist, h.hp)
+                        }
+                        _ => {
+                            format!("◆ {}  {:.0}м", ac.tank_name, dist)
+                        }
+                    };
                 }
             }
             HudText::EnemyMarker(idx) => {
@@ -1661,20 +1846,75 @@ pub fn update_hud(
                 }
             }
             HudPanel::BattleBanner => match *status {
-                BattleStatus::Ongoing => *vis = Visibility::Hidden,
+                BattleStatus::Ongoing => {
+                    if !player_alive && ally_alive > 0 {
+                        node.top = Val::Percent(10.0);
+                        *vis = Visibility::Visible;
+                        if let Some(mut border) = border_opt {
+                            *border = BorderColor::all(Color::srgb(0.95, 0.72, 0.24));
+                        }
+                    } else {
+                        *vis = Visibility::Hidden;
+                    }
+                }
                 BattleStatus::Victory => {
+                    node.top = Val::Percent(20.0);
                     *vis = Visibility::Visible;
                     if let Some(mut border) = border_opt {
                         *border = BorderColor::all(Color::srgb(0.35, 0.88, 0.42));
                     }
                 }
                 BattleStatus::Defeat => {
+                    node.top = Val::Percent(20.0);
                     *vis = Visibility::Visible;
                     if let Some(mut border) = border_opt {
                         *border = BorderColor::all(Color::srgb(0.92, 0.28, 0.24));
                     }
                 }
             },
+            HudPanel::AllyMarker(idx) => {
+                let Some(&(apos, _, _)) = alive_allies.get(idx) else {
+                    *vis = Visibility::Hidden;
+                    continue;
+                };
+                let Some((cam, cam_gt, _)) = cam_opt else {
+                    *vis = Visibility::Hidden;
+                    continue;
+                };
+                if let Ok(vp) = cam.world_to_viewport(cam_gt, apos + Vec3::Y * 2.9) {
+                    node.left = Val::Px((vp.x - 52.0).max(4.0));
+                    node.top = Val::Px((vp.y - 26.0).max(4.0));
+                    *vis = Visibility::Visible;
+                } else {
+                    *vis = Visibility::Hidden;
+                }
+            }
+            HudPanel::AllyMarkerHpBar(idx) => {
+                let show_bar = *mode == DamageRulesMode::ArcadeHpAndModules
+                    && alive_allies.get(idx).and_then(|a| a.2).is_some();
+                node.display = if show_bar {
+                    Display::Flex
+                } else {
+                    Display::None
+                };
+                *vis = if show_bar {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                };
+            }
+            HudPanel::AllyMarkerHpFill(idx) => {
+                if let Some(&(_, _, h_opt)) = alive_allies.get(idx)
+                    && *mode == DamageRulesMode::ArcadeHpAndModules
+                    && let Some(h) = h_opt
+                {
+                    node.width = Val::Percent((h.ratio() * 100.0).clamp(0.0, 100.0));
+                    *vis = Visibility::Inherited;
+                } else {
+                    node.width = Val::Percent(100.0);
+                    *vis = Visibility::Hidden;
+                }
+            }
             HudPanel::EnemyMarker(idx) => {
                 let Some(&(epos, _, _)) = alive_enemies.get(idx) else {
                     *vis = Visibility::Hidden;
@@ -1735,6 +1975,16 @@ pub fn update_hud(
                     let aim_mp = mp + dir * 13.0;
                     node.left = Val::Px((aim_mp.x - 2.0).clamp(0.0, bounds.map_px - 4.0));
                     node.top = Val::Px((aim_mp.y - 2.0).clamp(0.0, bounds.map_px - 4.0));
+                    *vis = Visibility::Inherited;
+                } else {
+                    *vis = Visibility::Hidden;
+                }
+            }
+            HudPanel::MinimapAllyDot(idx) => {
+                if let Some(&(apos, _, _)) = alive_allies.get(idx) {
+                    let mp = world_to_minimap(apos, bounds);
+                    node.left = Val::Px((mp.x - 3.5).clamp(0.0, bounds.map_px - 7.0));
+                    node.top = Val::Px((mp.y - 3.5).clamp(0.0, bounds.map_px - 7.0));
                     *vis = Visibility::Inherited;
                 } else {
                     *vis = Visibility::Hidden;

@@ -276,7 +276,8 @@ mod tests {
         assert_eq!(maps.len(), 5, "должно быть ровно 5 карт на Этапе 5");
 
         for spec in maps {
-            assert_eq!(spec.enemy_spawns.len(), 3, "карта {} без 3 врагов", spec.id);
+            assert_eq!(spec.ally_spawns.len(), 4, "карта {} без 4 союзников", spec.id);
+            assert_eq!(spec.enemy_spawns.len(), 5, "карта {} без 5 врагов", spec.id);
             let grid = generate_map_grid(&spec);
             assert!(
                 grid.count_solid() > 50_000,
@@ -292,9 +293,28 @@ mod tests {
                 .unwrap();
             assert!(
                 (h0 - h1).abs() < 0.05,
-                "спавн на карте {} неровный: {h0} vs {h1}",
+                "спавн игрока на карте {} неровный: {h0} vs {h1}",
                 spec.id
             );
+
+            for (i, s_pos) in spec
+                .ally_spawns
+                .iter()
+                .chain(spec.enemy_spawns.iter())
+                .enumerate()
+            {
+                let sh0 = grid
+                    .surface_height_at(s_pos.pos_xz.0, s_pos.pos_xz.1)
+                    .unwrap();
+                let sh1 = grid
+                    .surface_height_at(s_pos.pos_xz.0 + 2.0, s_pos.pos_xz.1 - 2.0)
+                    .unwrap();
+                assert!(
+                    (sh0 - sh1).abs() < 0.05,
+                    "ИИ-спавн #{i} на карте {} неровный: {sh0} vs {sh1}",
+                    spec.id
+                );
+            }
 
             let mut world = VoxelWorld::new(grid);
             let ground_res = world.carve_sphere(

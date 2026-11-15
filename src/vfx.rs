@@ -1826,6 +1826,7 @@ mod tests {
             tank: tank_ent,
             pos: Vec3::new(0.0, 2.0, 0.0),
             team: Team::Enemy,
+            killer: None,
             ammo_detonated: true,
         });
 

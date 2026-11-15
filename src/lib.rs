@@ -11,6 +11,7 @@ pub mod ballistics;
 pub mod core;
 pub mod damage;
 pub mod maps;
+pub mod progression;
 pub mod tank;
 pub mod ui;
 pub mod vfx;
@@ -28,6 +29,7 @@ pub fn configure_game_plugins(app: &mut App) {
         tank::TankPlugin,
         ballistics::BallisticsPlugin,
         damage::DamagePlugin,
+        progression::ProgressionPlugin,
         ai::AiPlugin,
         vfx::VfxPlugin,
         audio::GameAudioPlugin,
@@ -42,7 +44,7 @@ pub fn build_app() -> App {
         DefaultPlugins
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "Cerium-Turbo v1.2".into(),
+                    title: "Cerium-Turbo v1.3".into(),
                     canvas: Some("#bevy".into()),
                     fit_canvas_to_parent: true,
                     prevent_default_event_handling: true,
@@ -165,7 +167,7 @@ mod tests {
             core::DamageRulesMode::ModulesOnlyWt
         );
 
-        // Вход в бой в режиме WT + проверка наличия экипажа у всех танков и работы XRay Hit-Cam.
+        // Вход в бой в режиме WT + проверка наличия экипажа у всех 10 танков 5v5 и работы XRay Hit-Cam.
         app.world_mut()
             .resource_mut::<NextState<core::GameState>>()
             .set(core::GameState::InBattle);
@@ -180,7 +182,10 @@ mod tests {
         {
             let mut q = app.world_mut().query::<&damage::TankCrew>();
             let crew_count = q.iter(app.world()).count();
-            assert!(crew_count >= 2, "у игрока и ИИ должен быть TankCrew: {crew_count}");
+            assert!(
+                crew_count >= 10,
+                "у игрока, 4 союзников и 5 врагов должен быть TankCrew: {crew_count}"
+            );
         }
         app.world_mut().write_message(bevy::input::keyboard::KeyboardInput {
             key_code: KeyCode::Tab,

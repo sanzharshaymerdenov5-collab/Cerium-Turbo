@@ -150,29 +150,31 @@ pub fn hull_collider(spec: &TankSpec) -> Collider {
     Collider::convex_hull(&pts).unwrap_or_else(|| Collider::cuboid(hw * 2.0, top - belly, hl * 2.0))
 }
 
-/// Спавнит боевой танк с физикой Avian3D, бронеплитами и иерархией воксельных мешей.
-pub fn spawn_tank(
+/// Спавнит боевой танк с явно заданной командой и флагом игрока.
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_tank_with_team(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     assets: &VoxelAssets,
-    spec: TankSpec,
+    spec: &TankSpec,
     pos: Vec3,
-    yaw: f32,
+    yaw_rad: f32,
+    team: Team,
     is_player: bool,
+    spawn_seq: u64,
 ) -> Entity {
-    let team = if is_player { Team::Player } else { Team::Enemy };
-    let parts = build_visual_parts(&spec, team);
-    let susp = Suspension::for_spec(&spec);
-    let col = hull_collider(&spec);
+    let parts = build_visual_parts(spec, team);
+    let susp = Suspension::for_spec(spec);
+    let col = hull_collider(spec);
     let turret_offset = Vec3::from_array(spec.profile.turret_pivot);
     let gun_offset = Vec3::from_array(spec.profile.gun_pivot);
     let muzzle_offset = Vec3::new(0.0, 0.0, -(spec.profile.barrel_length + 0.15));
-    let initial_aim = pos + Quat::from_rotation_y(yaw) * Vec3::new(0.0, 1.8, -100.0);
+    let initial_aim = pos + Quat::from_rotation_y(yaw_rad) * Vec3::new(0.0, 1.8, -100.0);
 
     let root = commands
         .spawn((
-            Name::new(format!("Tank {} ({:?})", spec.name, team)),
-            Transform::from_translation(pos).with_rotation(Quat::from_rotation_y(yaw)),
+            Name::new(format!("Tank {} ({:?} #{})", spec.name, team, spawn_seq)),
+            Transform::from_translation(pos).with_rotation(Quat::from_rotation_y(yaw_rad)),
             Visibility::default(),
             RigidBody::Dynamic,
             col,
@@ -194,14 +196,14 @@ pub fn spawn_tank(
 
     let combat = TankCombat::new(team, spec.name.clone());
     let health = TankHealth::new(spec.max_hp);
-    let modules = TankModules::for_spec(&spec);
-    let crew = TankCrew::for_spec(&spec);
+    let modules = TankModules::for_spec(spec);
+    let crew = TankCrew::for_spec(spec);
     commands.entity(root).insert((
         TankRoot {
             entity: root,
             spec: spec.clone(),
             spawn_pos: pos,
-            spawn_yaw: yaw,
+            spawn_yaw: yaw_rad,
         },
         team,
         combat,
@@ -269,9 +271,23 @@ pub fn spawn_tank(
         .entity(root)
         .add_children(&[hull_vis, turret_pivot]);
 
-    spawn_tank_armor_plates(commands, root, turret_pivot, &spec);
+    spawn_tank_armor_plates(commands, root, turret_pivot, spec);
 
     root
+}
+
+/// Спавнит боевой танк с физикой Avian3D, бронеплитами и иерархией воксельных мешей.
+pub fn spawn_tank(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    assets: &VoxelAssets,
+    spec: TankSpec,
+    pos: Vec3,
+    yaw: f32,
+    is_player: bool,
+) -> Entity {
+    let team = if is_player { Team::Player } else { Team::Enemy };
+    spawn_tank_with_team(commands, meshes, assets, &spec, pos, yaw, team, is_player, 0)
 }
 
 /// Маркер 3D-макета танка в ангаре (для переспавна при смене танка).
@@ -333,4 +349,81 @@ fn build_visual_parts(spec: &TankSpec, team: Team) -> TankVoxelParts {
         }
     }
     parts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tank::spec::load_tank_spec;
+    use bevy::state::app::StatesPlugin;
+
+    #[test]
+    fn ally_with_player_team_never_receives_player_tank_or_hangar_preview() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), TransformPlugin, StatesPlugin))
+            .init_state::<GameState>()
+            .init_asset::<Mesh>()
+            .init_asset::<StandardMaterial>()
+            .init_resource::<VoxelAssets>();
+        app.finish();
+        app.cleanup();
+
+        let spec = load_tank_spec("t34_85").unwrap();
+        let (human, ally, enemy) = app
+            .world_mut()
+            .resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
+                world.resource_scope(|world, assets: Mut<VoxelAssets>| {
+                    let (h, a, e) = {
+                        let mut commands = world.commands();
+                        let h = spawn_tank_with_team(
+                            &mut commands,
+                            &mut meshes,
+                            &assets,
+                            &spec,
+                            Vec3::ZERO,
+                            0.0,
+                            Team::Player,
+                            true,
+                            0,
+                        );
+                        let a = spawn_tank_with_team(
+                            &mut commands,
+                            &mut meshes,
+                            &assets,
+                            &spec,
+                            Vec3::new(10.0, 0.0, 0.0),
+                            0.0,
+                            Team::Player,
+                            false,
+                            1,
+                        );
+                        let e = spawn_tank(
+                            &mut commands,
+                            &mut meshes,
+                            &assets,
+                            spec.clone(),
+                            Vec3::new(-10.0, 0.0, 0.0),
+                            0.0,
+                            false,
+                        );
+                        (h, a, e)
+                    };
+                    world.flush();
+                    (h, a, e)
+                })
+            });
+
+        assert!(app.world().entity(human).contains::<PlayerTank>());
+        assert!(!app.world().entity(human).contains::<HangarPreviewTank>());
+        assert_eq!(app.world().entity(human).get::<TankCombat>().unwrap().team, Team::Player);
+
+        assert!(!app.world().entity(ally).contains::<PlayerTank>());
+        assert!(!app.world().entity(ally).contains::<HangarPreviewTank>());
+        assert_eq!(*app.world().entity(ally).get::<Team>().unwrap(), Team::Player);
+        assert_eq!(app.world().entity(ally).get::<TankCombat>().unwrap().team, Team::Player);
+
+        assert!(!app.world().entity(enemy).contains::<PlayerTank>());
+        assert_eq!(*app.world().entity(enemy).get::<Team>().unwrap(), Team::Enemy);
+        assert_eq!(app.world().entity(enemy).get::<TankCombat>().unwrap().team, Team::Enemy);
+    }
 }
