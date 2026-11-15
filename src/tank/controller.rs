@@ -4,7 +4,8 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use super::armor::TankCombat;
-use super::spawn::{GunPivot, MuzzlePoint, PlayerTank, Suspension, TankRoot, TankState};
+use super::spawn::{GunPivot, MuzzlePoint, PlayerTank, Suspension, TankRoot, TankState, TurretPivot};
+use super::turret::compute_gun_and_muzzle_world;
 use crate::ballistics::{HitLog, spawn_projectile};
 use crate::core::Team;
 use crate::voxel::{Material, VoxelAssets, VoxelWorld};
@@ -243,27 +244,29 @@ pub fn tank_suspension_and_drive(
 }
 
 /// Перезарядка, выстрел и импульс отдачи.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn tank_fire_system(
     mut commands: Commands,
     time: Res<Time>,
     assets: Option<Res<VoxelAssets>>,
     mut log: ResMut<HitLog>,
     mut tanks: Query<(
+        &GlobalTransform,
         &TankRoot,
         &mut TankState,
         Option<&TankCombat>,
         Option<&PlayerTank>,
         Forces,
     )>,
-    guns: Query<(&GlobalTransform, &GunPivot)>,
-    muzzles: Query<(&GlobalTransform, &MuzzlePoint)>,
+    turrets: Query<(&Transform, &TurretPivot)>,
+    guns: Query<(&Transform, &GlobalTransform, &GunPivot)>,
+    muzzles: Query<(&Transform, &GlobalTransform, &MuzzlePoint)>,
     mut fired_w: MessageWriter<TankFiredMessage>,
 ) {
     let Some(assets) = assets else { return };
     let dt = time.delta_secs();
 
-    for (root, mut st, combat, player_opt, mut forces) in &mut tanks {
+    for (root_gt, root, mut st, combat, player_opt, mut forces) in &mut tanks {
         let alive = combat.is_none_or(|c| c.alive);
         let jammed = combat.is_some_and(|c| c.gun_jammed);
         let reload_mult = combat.map_or(1.0, |c| c.reload_mult.max(0.5));
@@ -282,11 +285,24 @@ pub fn tank_fire_system(
             log.shots += 1;
         }
 
-        let Some((m_gt, _)) = muzzles.iter().find(|(_, m)| m.tank == root.entity) else {
+        let Some((m_tf, m_gt, _)) = muzzles.iter().find(|(_, _, m)| m.tank == root.entity) else {
             continue;
         };
-        let origin = m_gt.translation();
-        let dir = m_gt.forward().as_vec3();
+        let (recoil_pt, current_muzzle) = if let (Some((t_tf, _)), Some((g_tf, _, _))) = (
+            turrets.iter().find(|(_, t)| t.tank == root.entity),
+            guns.iter().find(|(_, _, g)| g.tank == root.entity),
+        ) {
+            compute_gun_and_muzzle_world(root_gt, t_tf, g_tf, m_tf)
+        } else {
+            let fallback_pivot = guns
+                .iter()
+                .find(|(_, _, g)| g.tank == root.entity)
+                .map(|(_, gt, _)| gt.translation())
+                .unwrap_or_else(|| m_gt.translation());
+            (fallback_pivot, *m_gt)
+        };
+        let origin = current_muzzle.translation();
+        let dir = current_muzzle.forward().as_vec3();
 
         spawn_projectile(
             &mut commands,
@@ -299,11 +315,6 @@ pub fn tank_fire_system(
         );
 
         // Импульс отдачи в точке цапф орудия.
-        let recoil_pt = guns
-            .iter()
-            .find(|(_, g)| g.tank == root.entity)
-            .map(|(gt, _)| gt.translation())
-            .unwrap_or(origin);
         forces.apply_linear_impulse_at_point(-dir * root.spec.recoil_impulse_ns, recoil_pt);
 
         let has_muzzle_brake = root.spec.profile.has_muzzle_brake();

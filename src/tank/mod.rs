@@ -26,6 +26,9 @@ pub use spec::{
     VoxelVisualSource, available_tanks, load_tank_spec,
 };
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TankAimSet;
+
 pub struct TankPlugin;
 
 impl Plugin for TankPlugin {
@@ -39,9 +42,11 @@ impl Plugin for TankPlugin {
                     controller::read_player_input,
                     camera::update_tank_camera,
                     turret::aim_turret_and_gun,
+                    camera::update_gun_aim_point,
                     controller::tank_fire_system,
                 )
                     .chain()
+                    .in_set(TankAimSet)
                     .run_if(in_state(GameState::InBattle)),
             )
             .add_systems(

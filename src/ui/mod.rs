@@ -7,6 +7,7 @@ pub mod xray_cam;
 use bevy::prelude::*;
 
 use crate::core::{BattleSetupSet, GameState};
+use crate::tank::TankAimSet;
 
 const BUNDLED_FONT: &[u8] = include_bytes!("../../assets/fonts/DejaVuSansMono.ttf");
 
@@ -31,7 +32,10 @@ impl Plugin for UiPlugin {
             )
             .add_systems(
                 Update,
-                (hud::update_hud, xray_cam::update_xray_hit_cam)
+                (
+                    hud::update_hud.after(TankAimSet),
+                    xray_cam::update_xray_hit_cam,
+                )
                     .run_if(in_state(GameState::InBattle)),
             );
     }

@@ -1,4 +1,4 @@
-//! Боевой HUD (Обновление 1.4):
+//! Боевой HUD (Обновление 1.4.1):
 //! - Верхняя тактическая панель: спидометр/перезарядка, счёт команд 5v5, управление;
 //! - Многокомпонентный прицел с индикатором бронепробития, хит-маркером и снайперской оптикой;
 //! - Нижние панели живучести (WoT ХП + модули / WT экипаж + модули) и слоты БК/снаряжения;
@@ -131,6 +131,9 @@ pub enum HudPanel {
     EnemyMarkerHpBar(usize),
     EnemyMarkerHpFill(usize),
     SniperOverlay,
+    CrosshairOverlay,
+    CrosshairTick(u8),
+    GunReticle,
     MinimapPlayerDot,
     MinimapAimDot,
     MinimapAllyDot(usize),
@@ -192,10 +195,8 @@ pub fn setup_hud(
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
                 border: UiRect::all(Val::Px(46.0)),
-                justify_content: JustifyContent::SpaceBetween,
+                justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::bottom(Val::Px(14.0)),
                 ..default()
             },
             BorderColor::all(Color::srgba(0.01, 0.015, 0.02, 0.86)),
@@ -203,15 +204,43 @@ pub fn setup_hud(
             DespawnOnExit(GameState::InBattle),
         ))
         .with_children(|scope| {
-            scope.spawn(Node::default());
-            scope.spawn((
-                Text::new("──────       ──────"),
-                TextFont::from_font_size(18.0),
-                TextColor(Color::srgba(0.18, 0.22, 0.24, 0.55)),
-            ));
+            // Строго симметричные горизонтальные и нижняя штриховые линии ровно по оптическому центру (50%, 50%).
+            scope
+                .spawn(Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(42.0),
+                    ..default()
+                })
+                .with_children(|stadia| {
+                    stadia.spawn((
+                        Node {
+                            width: Val::Px(110.0),
+                            height: Val::Px(1.5),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(0.75, 0.90, 0.78, 0.45)),
+                    ));
+                    stadia.spawn((
+                        Node {
+                            width: Val::Px(110.0),
+                            height: Val::Px(1.5),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(0.75, 0.90, 0.78, 0.45)),
+                    ));
+                });
+
             scope
                 .spawn((
                     Node {
+                        position_type: PositionType::Absolute,
+                        bottom: Val::Px(14.0),
                         padding: UiRect::axes(Val::Px(10.0), Val::Px(3.0)),
                         border: UiRect::all(Val::Px(1.0)),
                         border_radius: BorderRadius::all(Val::Px(3.0)),
@@ -227,6 +256,183 @@ pub fn setup_hud(
                         TextColor(Color::srgb(0.78, 0.94, 0.78)),
                     ));
                 });
+        });
+
+    // Кольцо реального сведения орудия (проецируется по `aim.gun_point` в экранные координаты).
+    commands.spawn((
+        HudPanel::GunReticle,
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            top: Val::Px(0.0),
+            width: Val::Px(26.0),
+            height: Val::Px(26.0),
+            border: UiRect::all(Val::Px(1.8)),
+            border_radius: BorderRadius::MAX,
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+        BorderColor::all(Color::srgba(0.95, 1.0, 0.45, 0.85)),
+        Visibility::Hidden,
+        DespawnOnExit(GameState::InBattle),
+    ));
+
+    // Центральный перекрест прицела — строго в геометрическом центре экрана `(50%, 50%)`,
+    // полностью независим от размеров верхней/нижней панелей и ленты сообщений.
+    commands
+        .spawn((
+            HudPanel::CrosshairOverlay,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                top: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            DespawnOnExit(GameState::InBattle),
+        ))
+        .with_children(|overlay| {
+            overlay
+                .spawn(Node {
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    column_gap: Val::Px(6.0),
+                    ..default()
+                })
+                .with_children(|ret| {
+                    ret.spawn((
+                        HudText::CrosshairBracketL,
+                        Text::new("["),
+                        TextFont::from_font_size(20.0),
+                        TextColor(Color::srgba(0.95, 1.0, 0.45, 0.78)),
+                    ));
+
+                    ret.spawn(Node {
+                        position_type: PositionType::Relative,
+                        width: Val::Px(28.0),
+                        height: Val::Px(28.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    })
+                    .with_children(|pip_box| {
+                        // Центральная точка (2x2 px) ровно на (13..15, 13..15) внутри 28x28 px.
+                        pip_box.spawn((
+                            HudPanel::CrosshairTick(0),
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: Val::Px(13.0),
+                                top: Val::Px(13.0),
+                                width: Val::Px(2.0),
+                                height: Val::Px(2.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.95, 1.0, 0.45, 0.96)),
+                        ));
+                        // Левый, правый, верхний и нижний штрихи перекрестия.
+                        pip_box.spawn((
+                            HudPanel::CrosshairTick(1),
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: Val::Px(3.0),
+                                top: Val::Px(13.0),
+                                width: Val::Px(6.0),
+                                height: Val::Px(2.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.95, 1.0, 0.45, 0.94)),
+                        ));
+                        pip_box.spawn((
+                            HudPanel::CrosshairTick(2),
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: Val::Px(19.0),
+                                top: Val::Px(13.0),
+                                width: Val::Px(6.0),
+                                height: Val::Px(2.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.95, 1.0, 0.45, 0.94)),
+                        ));
+                        pip_box.spawn((
+                            HudPanel::CrosshairTick(3),
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: Val::Px(13.0),
+                                top: Val::Px(3.0),
+                                width: Val::Px(2.0),
+                                height: Val::Px(6.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.95, 1.0, 0.45, 0.94)),
+                        ));
+                        pip_box.spawn((
+                            HudPanel::CrosshairTick(4),
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: Val::Px(13.0),
+                                top: Val::Px(19.0),
+                                width: Val::Px(2.0),
+                                height: Val::Px(6.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.95, 1.0, 0.45, 0.94)),
+                        ));
+                        // Хит-маркер (`×` / `◈`) поверх перекрестия при попадании.
+                        pip_box.spawn((
+                            HudText::Crosshair,
+                            Text::new(""),
+                            TextFont::from_font_size(24.0),
+                            TextColor(Color::srgba(0.95, 1.0, 0.45, 0.94)),
+                        ));
+                    });
+
+                    ret.spawn((
+                        HudText::CrosshairBracketR,
+                        Text::new("]"),
+                        TextFont::from_font_size(20.0),
+                        TextColor(Color::srgba(0.95, 1.0, 0.45, 0.78)),
+                    ));
+                });
+        });
+
+    // Подприцельный блок (дальномер, хит-бейдж, лента урона) строго под прицелом, не сдвигающий перекрест.
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                top: Val::Percent(53.5),
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(4.0),
+                ..default()
+            },
+            DespawnOnExit(GameState::InBattle),
+        ))
+        .with_children(|center| {
+            center.spawn((
+                HudText::HitFlash,
+                Text::new(""),
+                TextFont::from_font_size(14.0),
+                TextColor(Color::srgb(1.0, 0.74, 0.24)),
+            ));
+            center.spawn((
+                HudText::Aim,
+                Text::new(""),
+                TextFont::from_font_size(14.0),
+                TextColor(Color::srgb(0.94, 0.96, 0.78)),
+            ));
+            center.spawn((
+                HudText::DamageFeed,
+                Text::new(""),
+                TextFont::from_font_size(15.0),
+                TextColor(Color::srgb(1.0, 0.72, 0.25)),
+            ));
         });
 
     commands
@@ -331,7 +537,7 @@ pub fn setup_hud(
                     score.spawn((
                         HudText::TeamStrip,
                         Text::new(format!(
-                            "СОЮЗ ■ ■ ■ ■ ■  |  {}  •  v1.3  |  ■ ■ ■ ■ ■ ВРАГ",
+                            "СОЮЗ ■ ■ ■ ■ ■  |  {}  •  v1.4.1  |  ■ ■ ■ ■ ■ ВРАГ",
                             map_spec.name
                         )),
                         TextFont::from_font_size(13.0),
@@ -363,63 +569,7 @@ pub fn setup_hud(
                 });
             });
 
-            // 2. ЦЕНТР ЭКРАНА: ПРИЦЕЛ СО СКОБАМИ, ХИТ-МАРКЕР, ДАЛЬНОМЕР И ЛЕНТА УРОНА
-            root.spawn(Node {
-                width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                row_gap: Val::Px(4.0),
-                ..default()
-            })
-            .with_children(|center| {
-                center
-                    .spawn(Node {
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(10.0),
-                        ..default()
-                    })
-                    .with_children(|ret| {
-                        ret.spawn((
-                            HudText::CrosshairBracketL,
-                            Text::new("["),
-                            TextFont::from_font_size(22.0),
-                            TextColor(Color::srgba(0.95, 1.0, 0.45, 0.78)),
-                        ));
-                        ret.spawn((
-                            HudText::Crosshair,
-                            Text::new("+"),
-                            TextFont::from_font_size(28.0),
-                            TextColor(Color::srgba(0.95, 1.0, 0.45, 0.94)),
-                        ));
-                        ret.spawn((
-                            HudText::CrosshairBracketR,
-                            Text::new("]"),
-                            TextFont::from_font_size(22.0),
-                            TextColor(Color::srgba(0.95, 1.0, 0.45, 0.78)),
-                        ));
-                    });
-
-                center.spawn((
-                    HudText::HitFlash,
-                    Text::new(""),
-                    TextFont::from_font_size(14.0),
-                    TextColor(Color::srgb(1.0, 0.74, 0.24)),
-                ));
-                center.spawn((
-                    HudText::Aim,
-                    Text::new(""),
-                    TextFont::from_font_size(14.0),
-                    TextColor(Color::srgb(0.94, 0.96, 0.78)),
-                ));
-                center.spawn((
-                    HudText::DamageFeed,
-                    Text::new(""),
-                    TextFont::from_font_size(15.0),
-                    TextColor(Color::srgb(1.0, 0.72, 0.25)),
-                ));
-            });
-
-            // 3. НИЖНЯЯ СТРОКА: ЛЕВО (ЖИВУЧЕСТЬ + СЛОТЫ БК/СНАРЯЖЕНИЯ) | ПРАВО (ЖУРНАЛ + МИНИ-КАРТА)
+            // 2. НИЖНЯЯ СТРОКА: ЛЕВО (ЖИВУЧЕСТЬ + СЛОТЫ БК/СНАРЯЖЕНИЯ) | ПРАВО (ЖУРНАЛ + МИНИ-КАРТА)
             root.spawn(Node {
                 width: Val::Percent(100.0),
                 justify_content: JustifyContent::SpaceBetween,
@@ -1147,7 +1297,7 @@ pub fn update_hud(
         With<PlayerTank>,
     >,
     all_combat: Query<(Entity, &GlobalTransform, &TankCombat, Option<&TankHealth>)>,
-    cams: Query<(&Camera, &GlobalTransform, &TankCamera), With<Camera3d>>,
+    cams: Query<(&Camera, &Transform, &TankCamera), With<Camera3d>>,
     mut texts: Query<(&HudText, &mut Text, Option<&mut TextColor>)>,
     mut panels: Query<(
         &HudPanel,
@@ -1229,6 +1379,7 @@ pub fn update_hud(
     }
 
     let cam_opt = cams.iter().next();
+    let cam_proj = cam_opt.map(|(cam, cam_tf, _)| (cam, GlobalTransform::from(*cam_tf)));
     let sniper = cam_opt.is_some_and(|(_, _, c)| c.sniper);
 
     let mut ally_total = 0usize;
@@ -1344,9 +1495,9 @@ pub fn update_hud(
         .collect::<Vec<_>>()
         .join(" ");
     let team_strip_str = if enemy_total == 0 {
-        format!("СОЮЗ {ally_icons}  |  {map_title} ({mode_short})  •  v1.3  |  МИШЕНИ")
+        format!("СОЮЗ {ally_icons}  |  {map_title} ({mode_short})  •  v1.4.1  |  МИШЕНИ")
     } else {
-        format!("СОЮЗ {ally_icons}  |  {map_title} ({mode_short})  •  v1.3  |  {enemy_icons} ВРАГ")
+        format!("СОЮЗ {ally_icons}  |  {map_title} ({mode_short})  •  v1.4.1  |  {enemy_icons} ВРАГ")
     };
 
     let controls_str = format!(
@@ -1359,9 +1510,9 @@ pub fn update_hud(
         }
     );
 
+    let gun_converged = aim.is_converged();
     let aim_str = {
-        let err = aim.point.distance(aim.gun_point);
-        let spread = if err < 0.8 { "СВЕДЁН" } else { "НАВОДКА..." };
+        let spread = if gun_converged { "СВЕДЁН" } else { "НАВОДКА..." };
         match (&aim.target_name, aim.target_plate, player) {
             (Some(name), Some(plate), Some((_, _, root, ..))) => {
                 let eff = effective_armor_mm(&root.spec.shell, plate.thickness_mm, plate.angle_deg);
@@ -1461,12 +1612,11 @@ pub fn update_hud(
             HudText::TeamStrip => txt.0 = team_strip_str.clone(),
             HudText::Controls => txt.0 = controls_str.clone(),
             HudText::Crosshair => {
-                txt.0 = if hit_marker.timer > 0.0 {
-                    if hit_marker.is_pen { "×" } else { "◈" }
+                if hit_marker.timer > 0.0 {
+                    txt.0 = if hit_marker.is_pen { "×" } else { "◈" }.to_string();
                 } else {
-                    "+"
+                    txt.0.clear();
                 }
-                .to_string();
                 if let Some(mut c) = color_opt {
                     c.0 = reticle_color;
                 }
@@ -1675,6 +1825,38 @@ pub fn update_hud(
                     Visibility::Hidden
                 };
             }
+            HudPanel::CrosshairOverlay => {
+                *vis = Visibility::Inherited;
+            }
+            HudPanel::CrosshairTick(_) => {
+                if let Some(mut bg) = bg_opt {
+                    bg.0 = reticle_color;
+                }
+            }
+            HudPanel::GunReticle => {
+                if !player_alive {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
+                let Some((cam, ref cam_gt)) = cam_proj else {
+                    *vis = Visibility::Hidden;
+                    continue;
+                };
+                if let Ok(vp) = cam.world_to_viewport(cam_gt, aim.gun_point) {
+                    node.left = Val::Px(vp.x - 13.0);
+                    node.top = Val::Px(vp.y - 13.0);
+                    *vis = Visibility::Visible;
+                    if let Some(mut border) = border_opt {
+                        *border = if gun_converged {
+                            BorderColor::all(reticle_color.with_alpha(0.92))
+                        } else {
+                            BorderColor::all(Color::srgba(1.0, 0.72, 0.24, 0.90))
+                        };
+                    }
+                } else {
+                    *vis = Visibility::Hidden;
+                }
+            }
             HudPanel::HullHp => {
                 node.display = if show_hp_panel {
                     Display::Flex
@@ -1877,7 +2059,7 @@ pub fn update_hud(
                     *vis = Visibility::Hidden;
                     continue;
                 };
-                let Some((cam, cam_gt, _)) = cam_opt else {
+                let Some((cam, ref cam_gt)) = cam_proj else {
                     *vis = Visibility::Hidden;
                     continue;
                 };
@@ -1920,7 +2102,7 @@ pub fn update_hud(
                     *vis = Visibility::Hidden;
                     continue;
                 };
-                let Some((cam, cam_gt, _)) = cam_opt else {
+                let Some((cam, ref cam_gt)) = cam_proj else {
                     *vis = Visibility::Hidden;
                     continue;
                 };
@@ -2007,6 +2189,7 @@ pub fn update_hud(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::state::app::StatesPlugin;
 
     #[test]
     fn world_to_minimap_projects_and_clamps_bounds() {
@@ -2028,5 +2211,69 @@ mod tests {
         // Выход за границы карты аккуратно ограничивается в пределах [0..map_px].
         let oob = world_to_minimap(Vec3::new(500.0, 0.0, -900.0), &b);
         assert!(oob.x <= b.map_px && oob.y >= 0.0);
+    }
+
+    #[test]
+    fn crosshair_overlay_is_centered_independently_of_hud_panels() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .init_state::<GameState>()
+            .add_systems(OnEnter(GameState::InBattle), setup_hud);
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::InBattle);
+        app.finish();
+        app.cleanup();
+        app.update();
+
+        let mut panels_q = app.world_mut().query::<(&HudPanel, &Node)>();
+        let crosshair_node = panels_q
+            .iter(app.world())
+            .find(|(p, _)| **p == HudPanel::CrosshairOverlay)
+            .map(|(_, n)| n.clone())
+            .expect("CrosshairOverlay должен создаваться в setup_hud");
+        assert_eq!(crosshair_node.position_type, PositionType::Absolute);
+        assert_eq!(crosshair_node.width, Val::Percent(100.0));
+        assert_eq!(crosshair_node.height, Val::Percent(100.0));
+        assert_eq!(crosshair_node.justify_content, JustifyContent::Center);
+        assert_eq!(crosshair_node.align_items, AlignItems::Center);
+
+        let gun_ring = panels_q
+            .iter(app.world())
+            .find(|(p, _)| **p == HudPanel::GunReticle)
+            .map(|(_, n)| n.clone())
+            .expect("GunReticle должен создаваться в setup_hud");
+        assert_eq!(gun_ring.position_type, PositionType::Absolute);
+
+        let mut texts_q = app.world_mut().query::<(&HudText, &Text)>();
+        let strip = texts_q
+            .iter(app.world())
+            .find(|(t, _)| **t == HudText::TeamStrip)
+            .map(|(_, txt)| txt.0.clone())
+            .expect("TeamStrip");
+        assert!(strip.contains("v1.4.1"), "ожидается v1.4.1: {strip}");
+    }
+
+    #[test]
+    fn horizon_aim_target_with_depth_offset_counts_as_converged() {
+        // При взгляде в пустой горизонт луч камеры (809.5 м) и луч ствола (800.2 м)
+        // лежат на одной прямой с разницей лишь по глубине ~7 м — угловое сведение равно 0°.
+        let horizon_aim = AimTarget {
+            point: Vec3::new(0.0, 5.65, -658.0),
+            distance: 809.5,
+            target_name: None,
+            target_plate: None,
+            gun_point: Vec3::new(0.0, 5.65, -665.0),
+            muzzle_origin: Vec3::new(0.0, 5.05, 135.2),
+            muzzle_dir: (Vec3::new(0.0, 5.65, -658.0) - Vec3::new(0.0, 5.05, 135.2)).normalize(),
+        };
+        assert!(horizon_aim.is_converged());
+
+        let turned_away = AimTarget {
+            muzzle_dir: Vec3::new(0.25, 0.0, -0.968).normalize(),
+            gun_point: Vec3::new(200.0, 5.05, -640.0),
+            ..horizon_aim
+        };
+        assert!(!turned_away.is_converged());
     }
 }

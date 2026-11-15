@@ -2126,7 +2126,7 @@ dependencies = [
 
 [[package]]
 name = "cerium_turbo"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "avian3d",
  "bevy",

@@ -5,7 +5,8 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use super::armor::ArmorOwner;
-use super::spawn::{AimCommand, GunPivot, MuzzlePoint, PlayerTank, TankRoot};
+use super::spawn::{AimCommand, GunPivot, MuzzlePoint, PlayerTank, TankRoot, TurretPivot};
+use super::turret::compute_gun_and_muzzle_world;
 use crate::ballistics::{ArmorPlate, TargetInfo, geometry::ray_plate};
 use crate::core::GameState;
 use crate::voxel::VoxelWorld;
@@ -23,7 +24,7 @@ impl Default for TankCamera {
     fn default() -> Self {
         Self {
             yaw: 0.0,
-            pitch: -0.22,
+            pitch: -0.12,
             distance: 11.5,
             sniper: false,
         }
@@ -51,6 +52,10 @@ pub struct AimTarget {
     pub target_plate: Option<AimPlateInfo>,
     /// Точка, куда сейчас смотрит линия ствола (для маркера сведения).
     pub gun_point: Vec3,
+    /// Актуальная позиция дульного среза в мире.
+    pub muzzle_origin: Vec3,
+    /// Актуальное направление оси канала ствола в мире.
+    pub muzzle_dir: Vec3,
 }
 
 impl Default for AimTarget {
@@ -61,7 +66,26 @@ impl Default for AimTarget {
             target_name: None,
             target_plate: None,
             gun_point: Vec3::new(0.0, 2.0, -100.0),
+            muzzle_origin: Vec3::new(0.0, 2.0, 0.0),
+            muzzle_dir: Vec3::NEG_Z,
         }
+    }
+}
+
+impl AimTarget {
+    /// Проверяет сведение линии ствола с точкой прицеливания по угловому расхождению
+    /// (работает одинаково точно как на близкой цели, так и на горизонте на 800 м).
+    pub fn is_converged(&self) -> bool {
+        if self.point.distance(self.gun_point) < 0.8 {
+            return true;
+        }
+        let Some(to_aim) = (self.point - self.muzzle_origin).try_normalize() else {
+            return true;
+        };
+        let Some(muzzle_fwd) = self.muzzle_dir.try_normalize() else {
+            return false;
+        };
+        muzzle_fwd.dot(to_aim) >= 0.0045f32.cos()
     }
 }
 
@@ -116,7 +140,6 @@ pub fn update_tank_camera(
     mut cursors: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut tanks: Query<(Entity, &GlobalTransform, &mut AimCommand), (With<TankRoot>, With<PlayerTank>)>,
     guns: Query<(&GlobalTransform, &GunPivot)>,
-    muzzles: Query<(&GlobalTransform, &MuzzlePoint)>,
     world: Option<Res<VoxelWorld>>,
     plates: Query<(&GlobalTransform, &ArmorPlate, &TargetInfo, Option<&ArmorOwner>)>,
     mut aim: ResMut<AimTarget>,
@@ -163,10 +186,13 @@ pub fn update_tank_camera(
     let forward = rot * Vec3::NEG_Z;
 
     if cam.sniper {
+        let sight_up = tank_gt.up().as_vec3();
+        let sight_fwd = (forward - sight_up * forward.dot(sight_up))
+            .normalize_or(tank_gt.forward().as_vec3());
         let anchor = guns
             .iter()
             .find(|(_, g)| g.tank == player_ent)
-            .map(|(g, _)| g.translation() + g.up() * 0.25 + g.forward() * 0.6)
+            .map(|(g, _)| g.translation() + sight_up * 0.24 + sight_fwd * 0.62)
             .unwrap_or_else(|| tank_gt.translation() + Vec3::new(0.0, 2.1, 0.0));
         cam_tf.translation = anchor;
         cam_tf.rotation = rot;
@@ -174,7 +200,7 @@ pub fn update_tank_camera(
             p.fov = 20f32.to_radians();
         }
     } else {
-        let focus = tank_gt.translation() + Vec3::new(0.0, 2.2, 0.0);
+        let focus = tank_gt.translation() + Vec3::new(0.0, 2.65, 0.0);
         let desired = focus - forward * cam.distance;
         let mut pos = desired;
         if let Some(w) = &world {
@@ -202,22 +228,6 @@ pub fn update_tank_camera(
     aim.target_name = name;
     aim.target_plate = plate_info;
     aim_cmd.world_point = pt;
-
-    if let Some((m_gt, _)) = muzzles.iter().find(|(_, m)| m.tank == player_ent) {
-        let m_pos = m_gt.translation();
-        let m_dir = m_gt.forward().as_vec3();
-        let (gpt, _, _, _) = raycast_aim(
-            m_pos,
-            m_dir,
-            0.2,
-            Some(player_ent),
-            world.as_deref(),
-            &plates,
-        );
-        aim.gun_point = gpt;
-    } else {
-        aim.gun_point = aim.point;
-    }
 
     // Применяем визуальную тряску камеры ПОСЛЕ вычисления линии прицеливания, чтобы не сбивать наводку.
     if let Some(ref mut s) = shake {
@@ -247,6 +257,51 @@ pub fn update_tank_camera(
             s.kick_dir = Vec3::ZERO;
         }
     }
+}
+
+/// Пересчитывает точку сведения ствола (`aim.gun_point`) ПОСЛЕ `aim_turret_and_gun`,
+/// используя актуальные локальные трансформации башни и орудия текущего кадра.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn update_gun_aim_point(
+    tanks: Query<(Entity, &GlobalTransform), (With<TankRoot>, With<PlayerTank>)>,
+    turrets: Query<(&Transform, &TurretPivot), Without<GunPivot>>,
+    guns: Query<(&Transform, &GunPivot), Without<TurretPivot>>,
+    muzzles: Query<(&Transform, &GlobalTransform, &MuzzlePoint), (Without<TurretPivot>, Without<GunPivot>)>,
+    world: Option<Res<VoxelWorld>>,
+    plates: Query<(&GlobalTransform, &ArmorPlate, &TargetInfo, Option<&ArmorOwner>)>,
+    mut aim: ResMut<AimTarget>,
+) {
+    let Ok((player_ent, tank_gt)) = tanks.single() else {
+        aim.gun_point = aim.point;
+        return;
+    };
+    let Some((m_tf, m_gt, _)) = muzzles.iter().find(|(_, _, m)| m.tank == player_ent) else {
+        aim.gun_point = aim.point;
+        return;
+    };
+
+    let current_muzzle = if let (Some((t_tf, _)), Some((g_tf, _))) = (
+        turrets.iter().find(|(_, t)| t.tank == player_ent),
+        guns.iter().find(|(_, g)| g.tank == player_ent),
+    ) {
+        compute_gun_and_muzzle_world(tank_gt, t_tf, g_tf, m_tf).1
+    } else {
+        *m_gt
+    };
+
+    let m_pos = current_muzzle.translation();
+    let m_dir = current_muzzle.forward().as_vec3();
+    let (gpt, _, _, _) = raycast_aim(
+        m_pos,
+        m_dir,
+        0.2,
+        Some(player_ent),
+        world.as_deref(),
+        &plates,
+    );
+    aim.muzzle_origin = m_pos;
+    aim.muzzle_dir = m_dir;
+    aim.gun_point = gpt;
 }
 
 fn raycast_aim(
@@ -284,4 +339,122 @@ fn raycast_aim(
     }
     let total = skip + best_t;
     (origin + dir * total, total, name, plate_info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tank::spec::load_tank_spec;
+    use crate::tank::turret::aim_turret_and_gun;
+    use bevy::input::InputPlugin;
+    use bevy::state::app::StatesPlugin;
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
+
+    #[test]
+    fn horizon_camera_and_gun_coincide_in_third_person_and_sniper() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, InputPlugin, TransformPlugin, StatesPlugin))
+            .init_resource::<AimTarget>()
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+                1.0 / 60.0,
+            )))
+            .add_systems(
+                Update,
+                (update_tank_camera, aim_turret_and_gun, update_gun_aim_point).chain(),
+            );
+
+        let spec = load_tank_spec("tiger_2").expect("tiger_2 spec");
+        let root_pos = Vec3::new(0.0, 3.0, 140.0);
+        let root_ent = app.world_mut().spawn_empty().id();
+        let turret_offset = Vec3::from_array(spec.profile.turret_pivot);
+        let gun_offset = Vec3::from_array(spec.profile.gun_pivot);
+        let muzzle_offset = Vec3::new(0.0, 0.0, -(spec.profile.barrel_length + 0.15));
+
+        app.world_mut().entity_mut(root_ent).insert((
+            Transform::from_translation(root_pos),
+            GlobalTransform::from_translation(root_pos),
+            TankRoot {
+                entity: root_ent,
+                spec: spec.clone(),
+                spawn_pos: root_pos,
+                spawn_yaw: 0.0,
+            },
+            PlayerTank,
+            AimCommand {
+                world_point: Vec3::new(0.0, 5.65, -660.0),
+            },
+        ));
+        let turret_ent = app
+            .world_mut()
+            .spawn((
+                TurretPivot { tank: root_ent },
+                Transform::from_translation(turret_offset),
+            ))
+            .id();
+        let gun_ent = app
+            .world_mut()
+            .spawn((
+                GunPivot { tank: root_ent },
+                Transform::from_translation(gun_offset),
+            ))
+            .id();
+        let muzzle_ent = app
+            .world_mut()
+            .spawn((
+                MuzzlePoint { tank: root_ent },
+                Transform::from_translation(muzzle_offset),
+            ))
+            .id();
+        app.world_mut().entity_mut(gun_ent).add_child(muzzle_ent);
+        app.world_mut().entity_mut(turret_ent).add_child(gun_ent);
+        app.world_mut().entity_mut(root_ent).add_child(turret_ent);
+
+        let cam_ent = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                Projection::Perspective(PerspectiveProjection {
+                    fov: 60f32.to_radians(),
+                    ..default()
+                }),
+                Transform::default(),
+                TankCamera {
+                    yaw: 0.0,
+                    pitch: 0.0, // Смотрим ровно в горизонт.
+                    distance: 11.5,
+                    sniper: false,
+                },
+            ))
+            .id();
+
+        app.finish();
+        app.cleanup();
+
+        for mode_sniper in [false, true] {
+            app.world_mut().get_mut::<TankCamera>(cam_ent).unwrap().sniper = mode_sniper;
+            for _ in 0..30 {
+                app.update();
+            }
+            let cam_tf = *app.world().get::<Transform>(cam_ent).unwrap();
+            let aim = app.world().resource::<AimTarget>();
+            let inv_cam = cam_tf.to_matrix().inverse();
+
+            let p_view = inv_cam.transform_point3(aim.point);
+            let g_view = inv_cam.transform_point3(aim.gun_point);
+            assert!(p_view.z < -10.0 && g_view.z < -10.0);
+
+            let ndc_p = Vec2::new(p_view.x / -p_view.z, p_view.y / -p_view.z);
+            let ndc_g = Vec2::new(g_view.x / -g_view.z, g_view.y / -g_view.z);
+            assert!(
+                ndc_p.length() < 1e-4,
+                "центр прицела (sniper={mode_sniper}) должен лежать на оси камеры: {ndc_p:?}"
+            );
+            assert!(
+                (ndc_g - ndc_p).length() < 0.002,
+                "орудие (sniper={mode_sniper}) должно совпадать с центром прицела на горизонте: ndc_p={ndc_p:?}, ndc_g={ndc_g:?}"
+            );
+            assert!(aim.is_converged());
+        }
+    }
 }
