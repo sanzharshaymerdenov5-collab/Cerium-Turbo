@@ -5,7 +5,6 @@ use bevy::prelude::*;
 
 use super::armor::TankCombat;
 use super::spawn::{GunPivot, MuzzlePoint, PlayerTank, Suspension, TankRoot, TankState};
-use super::spec::TurretShape;
 use crate::ballistics::{HitLog, spawn_projectile};
 use crate::core::Team;
 use crate::voxel::{Material, VoxelAssets, VoxelWorld};
@@ -307,10 +306,7 @@ pub fn tank_fire_system(
             .unwrap_or(origin);
         forces.apply_linear_impulse_at_point(-dir * root.spec.recoil_impulse_ns, recoil_pt);
 
-        let has_muzzle_brake = matches!(
-            root.spec.profile.turret_shape,
-            TurretShape::BoxHeavy | TurretShape::RoundedDome
-        );
+        let has_muzzle_brake = root.spec.profile.has_muzzle_brake();
         fired_w.write(TankFiredMessage {
             tank: root.entity,
             team,

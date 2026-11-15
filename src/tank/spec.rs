@@ -179,6 +179,32 @@ pub enum TurretShape {
     RoundedDome,
 }
 
+/// Точный исторический архетип визуальной модели танка.
+/// При значении `Auto` билдер использует пары `HullShape` + `TurretShape` (обратная совместимость).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TankVisualModel {
+    #[default]
+    Auto,
+    Ms1,
+    Bt7,
+    T34_76,
+    Kv1,
+    T34_85,
+    Su100,
+    Is3,
+    Pz2C,
+    Pz3,
+    Pz4,
+    Panther,
+    Tiger1,
+    Tiger2,
+    M2A4,
+    M3Stuart,
+    M24Chaffee,
+    M4A3E8,
+    M26Pershing,
+}
+
 /// Габариты процедурной модели (метры; кадр танка: вперёд −Z, вверх +Y, вправо +X,
 /// начало координат — центр по низу гусениц).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -203,6 +229,28 @@ pub struct ProceduralTankProfile {
     pub hull_shape: HullShape,
     #[serde(default)]
     pub turret_shape: TurretShape,
+    #[serde(default)]
+    pub visual_model: TankVisualModel,
+}
+
+impl ProceduralTankProfile {
+    /// Определяет, оснащён ли ствол дульным тормозом.
+    pub fn has_muzzle_brake(&self) -> bool {
+        match self.visual_model {
+            TankVisualModel::Tiger1
+            | TankVisualModel::Tiger2
+            | TankVisualModel::Panther
+            | TankVisualModel::Pz4
+            | TankVisualModel::Is3
+            | TankVisualModel::M26Pershing
+            | TankVisualModel::M4A3E8 => true,
+            TankVisualModel::Auto => matches!(
+                self.turret_shape,
+                TurretShape::BoxHeavy | TurretShape::RoundedDome
+            ),
+            _ => false,
+        }
+    }
 }
 
 fn default_max_hp() -> f32 {

@@ -4,7 +4,7 @@ use std::f32::consts::{FRAC_PI_2, PI};
 
 use bevy::prelude::*;
 
-use super::spec::{ArmorZone, HullShape, TankSpec, TurretShape};
+use super::spec::{ArmorZone, HullShape, TankSpec, TankVisualModel, TurretShape};
 use crate::ballistics::{ArmorPlate, TargetInfo};
 use crate::core::{GameState, Team};
 
@@ -161,11 +161,25 @@ pub fn turret_plate_specs(spec: &TankSpec) -> Vec<TankPlateDesc> {
     let rz = p.turret_radius_z;
     let th = p.turret_height;
 
-    let front_slope_deg: f32 = match p.turret_shape {
-        TurretShape::FixedCasemate => 50.0,
-        TurretShape::RoundedDome => 32.0,
-        TurretShape::BoxHeavy => 6.0,
-        _ => 16.0,
+    let front_slope_deg: f32 = match p.visual_model {
+        TankVisualModel::Su100 => 50.0,
+        TankVisualModel::Is3 => 32.0,
+        TankVisualModel::M26Pershing | TankVisualModel::T34_85 | TankVisualModel::T34_76 => 22.0,
+        TankVisualModel::M4A3E8 | TankVisualModel::M24Chaffee | TankVisualModel::Bt7 => 20.0,
+        TankVisualModel::Panther => 18.0,
+        TankVisualModel::Tiger2 => 10.0,
+        TankVisualModel::Tiger1 | TankVisualModel::Pz4 | TankVisualModel::Pz3 | TankVisualModel::Kv1 => {
+            8.0
+        }
+        TankVisualModel::Pz2C | TankVisualModel::Ms1 | TankVisualModel::M2A4 | TankVisualModel::M3Stuart => {
+            12.0
+        }
+        TankVisualModel::Auto => match p.turret_shape {
+            TurretShape::FixedCasemate => 50.0,
+            TurretShape::RoundedDome => 32.0,
+            TurretShape::BoxHeavy => 6.0,
+            _ => 16.0,
+        },
     };
     let front_rot = Quat::from_rotation_x(front_slope_deg.to_radians()) * Quat::from_rotation_y(PI);
 
